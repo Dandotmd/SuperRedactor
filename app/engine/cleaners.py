@@ -1,0 +1,351 @@
+"""Detect and fix common spreadsheet mess: junk rows, duplicates, stray
+whitespace, inconsistent missing-value markers, decorated numbers, and
+mixed date formats.
+
+`analyze` reports findings; `apply_fixes` applies a chosen subset. Both run
+the same pipeline so finding ids stay stable between the two calls. Input
+sheets are never mutated.
+"""
+
+import re
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from app.engine.readers import Sheet, _normalize
+
+MAX_SAMPLES = 3
+_SYNTH_HEADER = re.compile(r"^(extra_)?column_\d+$")
+_NUMERICISH = re.compile(r"^-?[\d,.$()%\s]+$")
+_TRAILING_KEYWORD = re.compile(
+    r"^(grand\s+)?total\b|^subtotal\b|^source\b|^notes?\b|^prepared\b", re.IGNORECASE
+)
+_PLAIN_NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
+_DECORATED_NUMBER = re.compile(r"^\(?\$?\s?-?[\d,]+(\.\d+)?\)?%?$")
+
+_MISSING_MARKERS = {"n/a", "na", "null", "none", "nan", "#n/a", "#null!", "--"}
+
+_DATE_FORMATS = (
+    "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%m-%d-%Y",
+    "%d %b %Y", "%d %B %Y", "%b %d, %Y", "%B %d, %Y", "%d-%b-%Y",
+)
+
+
+@dataclass
+class Finding:
+    id: str
+    kind: str
+    sheet: str
+    column: str | None
+    count: int
+    description: str
+    samples: list[list[str]] = field(default_factory=list)
+
+
+def analyze(sheets: list[Sheet]) -> list[Finding]:
+    _, findings = clean(sheets, enabled=None)
+    return findings
+
+
+def apply_fixes(sheets: list[Sheet], enabled_ids) -> list[Sheet]:
+    cleaned, _ = clean(sheets, enabled=set(enabled_ids))
+    return cleaned
+
+
+def clean(
+    sheets: list[Sheet], enabled: set[str] | None
+) -> tuple[list[Sheet], list[Finding]]:
+    """enabled=None means detect and apply everything."""
+    findings: list[Finding] = []
+    out: list[Sheet] = []
+    for sheet in sheets:
+        headers = list(sheet.headers)
+        rows = [list(r) for r in sheet.rows]
+
+        def run(kind, detect, column=None, _s=sheet.name):
+            """detect() returns (count, description, samples, fixer) or None;
+            fixer mutates headers/rows in place."""
+            nonlocal headers, rows
+            found = detect()
+            if found is None:
+                return
+            count, description, samples, fixer = found
+            fid = f"{kind}:{_s}" + (f":{column}" if column is not None else "")
+            column_name = headers[column] if column is not None else None
+            findings.append(
+                Finding(fid, kind, _s, column_name, count, description, samples)
+            )
+            if enabled is None or fid in enabled:
+                fixer()
+
+        # --- structural, row-level (column indexes stay stable) ---
+        run("title_rows", lambda: _detect_title_rows(headers, rows))
+        run("trailing_junk", lambda: _detect_trailing_junk(rows))
+        run("blank_rows", lambda: _detect_blank_rows(rows))
+        run("duplicate_rows", lambda: _detect_duplicates(rows))
+
+        # --- cell-level ---
+        run("whitespace", lambda: _detect_whitespace(headers, rows))
+        run("missing_values", lambda: _detect_missing(rows))
+        for idx in range(len(headers)):
+            run(
+                "numbers_as_text",
+                lambda i=idx: _detect_decorated_numbers(headers, rows, i),
+                column=idx,
+            )
+            run(
+                "date_formats",
+                lambda i=idx: _detect_mixed_dates(headers, rows, i),
+                column=idx,
+            )
+
+        # --- last: column removal (shifts indexes, so nothing follows) ---
+        run("blank_columns", lambda: _detect_blank_columns(headers, rows))
+
+        out.append(Sheet(name=sheet.name, headers=headers, rows=rows))
+    return out, findings
+
+
+# --- detectors -------------------------------------------------------------
+# Each returns None or (count, description, samples, fixer).
+
+
+def _display_header(name: str) -> str:
+    return "" if _SYNTH_HEADER.match(name) else name
+
+
+def _nonempty(row: list[str]) -> int:
+    return sum(1 for c in row if c.strip())
+
+
+def _detect_title_rows(headers: list[str], rows: list[list[str]]):
+    grid = [[_display_header(h) for h in headers]] + rows
+    limit = min(10, len(grid))
+    counts = [_nonempty(grid[i]) for i in range(limit)]
+    if not counts:
+        return None
+    best = max(range(limit), key=lambda i: counts[i])
+    if best == 0 or counts[best] < 3:
+        return None
+    if any(counts[i] > counts[best] // 2 for i in range(best)):
+        return None
+    candidate = grid[best]
+    textish = sum(
+        1 for c in candidate if c.strip() and not _NUMERICISH.match(c.strip())
+    )
+    if textish / counts[best] < 0.8:
+        return None
+
+    removed = [grid[i] for i in range(best)]
+    samples = [[" | ".join(c for c in r if c.strip()) or "(blank row)", "(removed)"]
+               for r in removed[:MAX_SAMPLES]]
+
+    def fix():
+        new_headers, new_rows = _normalize(list(candidate), [list(r) for r in grid[best + 1:]])
+        headers[:] = new_headers
+        rows[:] = new_rows
+
+    return (
+        best,
+        f"The real header is on row {best + 1}; {best} junk row(s) above it",
+        samples,
+        fix,
+    )
+
+
+def _detect_trailing_junk(rows: list[list[str]]):
+    if len(rows) < 3:
+        return None
+    typical = sorted(_nonempty(r) for r in rows)[len(rows) // 2]
+    junk = 0
+    for row in reversed(rows):
+        first = next((c.strip() for c in row if c.strip()), "")
+        if _TRAILING_KEYWORD.match(first) or _nonempty(row) <= max(1, typical // 3):
+            junk += 1
+        else:
+            break
+    if junk == 0 or junk >= len(rows):
+        return None
+    removed = rows[len(rows) - junk:]
+    samples = [[" | ".join(c for c in r if c.strip()), "(removed)"] for r in removed[:MAX_SAMPLES]]
+
+    def fix():
+        del rows[len(rows) - junk:]
+
+    return junk, f"{junk} summary/footnote row(s) at the bottom", samples, fix
+
+
+def _detect_blank_rows(rows: list[list[str]]):
+    blank = [i for i, r in enumerate(rows) if _nonempty(r) == 0]
+    if not blank:
+        return None
+
+    def fix():
+        rows[:] = [r for r in rows if _nonempty(r) > 0]
+
+    return len(blank), f"{len(blank)} completely empty row(s)", [], fix
+
+
+def _detect_duplicates(rows: list[list[str]]):
+    seen: set[tuple] = set()
+    dupes = 0
+    for row in rows:
+        key = tuple(row)
+        if key in seen:
+            dupes += 1
+        seen.add(key)
+    if dupes == 0:
+        return None
+
+    def fix():
+        kept: set[tuple] = set()
+        result = []
+        for row in rows:
+            key = tuple(row)
+            if key not in kept:
+                kept.add(key)
+                result.append(row)
+        rows[:] = result
+
+    return dupes, f"{dupes} exact duplicate row(s) (first kept)", [], fix
+
+
+_WS_TRANSLATE = {0xA0: " ", 0x2007: " ", 0x202F: " ", 0x200B: None, 0xFEFF: None}
+
+
+def _normalize_ws(value: str) -> str:
+    return re.sub(r"  +", " ", value.translate(_WS_TRANSLATE)).strip()
+
+
+def _detect_whitespace(headers: list[str], rows: list[list[str]]):
+    samples: list[list[str]] = []
+    count = 0
+    for row in rows:
+        for cell in row:
+            fixed = _normalize_ws(cell)
+            if fixed != cell:
+                count += 1
+                if len(samples) < MAX_SAMPLES:
+                    samples.append([repr(cell), repr(fixed)])
+    if count == 0:
+        return None
+
+    def fix():
+        headers[:] = [_normalize_ws(h) or h for h in headers]
+        for row in rows:
+            row[:] = [_normalize_ws(c) for c in row]
+
+    return count, f"{count} cell(s) with stray/odd whitespace", samples, fix
+
+
+def _detect_missing(rows: list[list[str]]):
+    count = 0
+    seen_markers = set()
+    for row in rows:
+        for cell in row:
+            if cell.strip().lower() in _MISSING_MARKERS:
+                count += 1
+                seen_markers.add(cell.strip())
+    if count == 0:
+        return None
+    samples = [[m, "(empty)"] for m in sorted(seen_markers)[:MAX_SAMPLES]]
+
+    def fix():
+        for row in rows:
+            row[:] = ["" if c.strip().lower() in _MISSING_MARKERS else c for c in row]
+
+    return count, f"{count} cell(s) using markers like N/A or NULL for missing data", samples, fix
+
+
+def _strip_number(value: str) -> str:
+    v = value.strip().replace("$", "").replace(",", "").replace(" ", "")
+    if v.endswith("%"):
+        v = v[:-1]
+    if v.startswith("(") and v.endswith(")"):
+        v = "-" + v[1:-1]
+    return v
+
+
+def _detect_decorated_numbers(headers: list[str], rows: list[list[str]], idx: int):
+    values = [r[idx] for r in rows if r[idx].strip()]
+    if len(values) < 2:
+        return None
+    decorated = [v for v in values if _DECORATED_NUMBER.match(v.strip()) and not _PLAIN_NUMBER.match(v.strip())]
+    plain = [v for v in values if _PLAIN_NUMBER.match(v.strip())]
+    if not decorated or (len(decorated) + len(plain)) / len(values) < 0.8:
+        return None
+    samples = [[v, _strip_number(v)] for v in decorated[:MAX_SAMPLES]]
+
+    def fix():
+        for row in rows:
+            if row[idx].strip() and _DECORATED_NUMBER.match(row[idx].strip()):
+                row[idx] = _strip_number(row[idx])
+
+    return (
+        len(decorated),
+        f"'{headers[idx]}': {len(decorated)} number(s) stored as text ($, commas, parentheses)",
+        samples,
+        fix,
+    )
+
+
+def _parse_date(value: str) -> datetime | None:
+    v = value.strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(v, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _detect_mixed_dates(headers: list[str], rows: list[list[str]], idx: int):
+    values = [r[idx] for r in rows if r[idx].strip()]
+    if len(values) < 3:
+        return None
+    parsed = [(v, _parse_date(v)) for v in values]
+    ok = [(v, d) for v, d in parsed if d is not None]
+    if len(ok) / len(values) < 0.8:
+        return None
+    changed = [(v, d.strftime("%Y-%m-%d")) for v, d in ok if v.strip() != d.strftime("%Y-%m-%d")]
+    if not changed:
+        return None
+    samples = [[v, iso] for v, iso in changed[:MAX_SAMPLES]]
+
+    def fix():
+        for row in rows:
+            if row[idx].strip():
+                d = _parse_date(row[idx])
+                if d is not None:
+                    row[idx] = d.strftime("%Y-%m-%d")
+
+    return (
+        len(changed),
+        f"'{headers[idx]}': {len(changed)} date(s) in inconsistent formats (normalized to YYYY-MM-DD; ambiguous dates read as US month/day)",
+        samples,
+        fix,
+    )
+
+
+def _detect_blank_columns(headers: list[str], rows: list[list[str]]):
+    if not rows:
+        return None
+    blank_idx = [
+        i for i in range(len(headers))
+        if all(not r[i].strip() for r in rows)
+    ]
+    if not blank_idx:
+        return None
+    names = [headers[i] for i in blank_idx]
+
+    def fix():
+        keep = [i for i in range(len(headers)) if i not in blank_idx]
+        headers[:] = [headers[i] for i in keep]
+        for row in rows:
+            row[:] = [row[i] for i in keep]
+
+    return (
+        len(blank_idx),
+        f"{len(blank_idx)} completely empty column(s): {', '.join(names[:5])}",
+        [],
+        fix,
+    )

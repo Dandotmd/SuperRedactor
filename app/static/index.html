@@ -14,6 +14,7 @@
     <span class="stamp" title="The server binds to 127.0.0.1 and makes no outbound requests">Local only</span>
     <nav class="tabs" role="tablist">
       <button class="tab is-active" role="tab" aria-selected="true" data-panel="panel-redact">Redact a file</button>
+      <button class="tab" role="tab" aria-selected="false" data-panel="panel-clean">Clean up a file</button>
       <button class="tab" role="tab" aria-selected="false" data-panel="panel-deredact">De-redact AI output</button>
     </nav>
   </div>
@@ -45,6 +46,33 @@
       </div>
       <p class="hint">The ZIP holds the redacted file plus <code>mapping.json</code> —
         the key that turns fake values back into real ones. Keep it local, never share it.</p>
+    </div>
+  </section>
+
+  <section id="panel-clean" class="panel" role="tabpanel" hidden>
+    <div id="clean-dropzone" class="dropzone" tabindex="0" role="button"
+         aria-label="Choose a CSV or Excel file to clean up">
+      <p class="dropzone-title">Drop a messy CSV or .xlsx here, or click to choose</p>
+      <p class="dropzone-note">Junk rows, duplicates, stray whitespace, N/A markers,
+        $1,234-style numbers, and mixed date formats are found automatically.
+        Nothing is uploaded anywhere.</p>
+      <input id="clean-file-input" type="file" accept=".csv,.xlsx" hidden>
+    </div>
+
+    <div id="clean-workspace" hidden>
+      <div class="workspace-bar">
+        <span id="clean-file-label" class="file-label"></span>
+        <div id="clean-sheet-tabs" class="sheet-tabs"></div>
+        <button id="clean-reset-btn" class="btn-quiet" type="button">Start over</button>
+      </div>
+      <div id="clean-findings" class="findings"></div>
+      <div class="table-scroll">
+        <table id="clean-preview-table"></table>
+      </div>
+      <div class="actionbar">
+        <p id="clean-summary" class="summary" aria-live="polite"></p>
+        <button id="clean-btn" class="btn-primary" type="button">Download cleaned file</button>
+      </div>
     </div>
   </section>
 

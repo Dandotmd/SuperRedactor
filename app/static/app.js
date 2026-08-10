@@ -230,6 +230,215 @@ $("redact-btn").addEventListener("click", async () => {
   URL.revokeObjectURL(link.href);
 });
 
+// ---- clean up ------------------------------------------------------------
+
+const cleanState = {
+  sessionId: null,
+  filename: null,
+  findings: [],       // from /api/clean/analyze
+  enabled: new Set(), // finding ids currently checked
+  sheets: [],         // latest preview sheets
+  activeSheet: 0,
+};
+
+const cleanDropzone = $("clean-dropzone");
+const cleanFileInput = $("clean-file-input");
+
+cleanDropzone.addEventListener("click", () => cleanFileInput.click());
+cleanDropzone.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") cleanFileInput.click();
+});
+cleanDropzone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  cleanDropzone.classList.add("is-over");
+});
+cleanDropzone.addEventListener("dragleave", () => cleanDropzone.classList.remove("is-over"));
+cleanDropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  cleanDropzone.classList.remove("is-over");
+  if (e.dataTransfer.files.length) cleanUpload(e.dataTransfer.files[0]);
+});
+cleanFileInput.addEventListener("change", () => {
+  if (cleanFileInput.files.length) cleanUpload(cleanFileInput.files[0]);
+});
+
+async function cleanUpload(file) {
+  clearError();
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch("/api/upload", { method: "POST", body: form });
+  if (!resp.ok) return showError(await apiError(resp));
+  const body = await resp.json();
+  cleanState.sessionId = body.session_id;
+  cleanState.filename = body.filename;
+
+  const analysis = await fetch("/api/clean/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: cleanState.sessionId }),
+  });
+  if (!analysis.ok) return showError(await apiError(analysis));
+  const data = await analysis.json();
+  cleanState.findings = data.findings;
+  cleanState.enabled = new Set(data.findings.map((f) => f.id));
+
+  cleanDropzone.hidden = true;
+  $("clean-workspace").hidden = false;
+  $("clean-file-label").textContent = body.filename;
+  renderFindings();
+  renderCleanPreview(data.sheets);
+}
+
+$("clean-reset-btn").addEventListener("click", () => {
+  cleanState.sessionId = null;
+  cleanFileInput.value = "";
+  $("clean-workspace").hidden = true;
+  cleanDropzone.hidden = false;
+  clearError();
+});
+
+function renderFindings() {
+  const holder = $("clean-findings");
+  holder.innerHTML = "";
+  if (!cleanState.findings.length) {
+    const p = document.createElement("p");
+    p.className = "all-clear";
+    p.textContent = "No problems found — this file already looks tidy.";
+    holder.appendChild(p);
+    $("clean-summary").textContent = "The download will match the original.";
+    return;
+  }
+  const multiSheet = new Set(cleanState.findings.map((f) => f.sheet)).size > 1;
+  for (const finding of cleanState.findings) {
+    const label = document.createElement("label");
+    label.className = "finding" + (cleanState.enabled.has(finding.id) ? "" : " is-off");
+
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = cleanState.enabled.has(finding.id);
+    box.addEventListener("change", async () => {
+      if (box.checked) cleanState.enabled.add(finding.id);
+      else cleanState.enabled.delete(finding.id);
+      label.classList.toggle("is-off", !box.checked);
+      await refreshCleanPreview();
+    });
+
+    const bodyEl = document.createElement("div");
+    bodyEl.className = "finding-body";
+    const desc = document.createElement("div");
+    desc.className = "finding-desc";
+    desc.textContent = finding.description;
+    if (multiSheet) {
+      const sheetSpan = document.createElement("span");
+      sheetSpan.className = "finding-sheet";
+      sheetSpan.textContent = ` — sheet "${finding.sheet}"`;
+      desc.appendChild(sheetSpan);
+    }
+    bodyEl.appendChild(desc);
+    if (finding.samples.length) {
+      const samples = document.createElement("p");
+      samples.className = "finding-samples";
+      finding.samples.forEach(([before, after], i) => {
+        if (i) samples.append("   ");
+        samples.append(before + " ");
+        const arrow = document.createElement("span");
+        arrow.className = "arrow";
+        arrow.textContent = "→";
+        samples.append(arrow, " " + after);
+      });
+      bodyEl.appendChild(samples);
+    }
+
+    label.append(box, bodyEl);
+    holder.appendChild(label);
+  }
+  renderCleanSummary();
+}
+
+function renderCleanSummary() {
+  const on = cleanState.enabled.size;
+  const total = cleanState.findings.length;
+  $("clean-summary").textContent = total
+    ? `${on} of ${total} fixes selected`
+    : "The download will match the original.";
+}
+
+async function refreshCleanPreview() {
+  const resp = await fetch("/api/clean/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: cleanState.sessionId,
+      enabled: [...cleanState.enabled],
+    }),
+  });
+  if (!resp.ok) return showError(await apiError(resp));
+  renderCleanPreview((await resp.json()).sheets);
+  renderCleanSummary();
+}
+
+function renderCleanPreview(previewSheets) {
+  cleanState.sheets = previewSheets;
+  if (cleanState.activeSheet >= previewSheets.length) cleanState.activeSheet = 0;
+
+  const tabs = $("clean-sheet-tabs");
+  tabs.innerHTML = "";
+  if (previewSheets.length > 1) {
+    previewSheets.forEach((s, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "sheet-tab" + (i === cleanState.activeSheet ? " is-active" : "");
+      btn.textContent = s.name;
+      btn.addEventListener("click", () => {
+        cleanState.activeSheet = i;
+        renderCleanPreview(cleanState.sheets);
+      });
+      tabs.appendChild(btn);
+    });
+  }
+
+  const table = $("clean-preview-table");
+  table.innerHTML = "";
+  const sheet = previewSheets[cleanState.activeSheet];
+  const headRow = document.createElement("tr");
+  for (const header of sheet.headers) {
+    const th = document.createElement("th");
+    th.textContent = header;
+    headRow.appendChild(th);
+  }
+  table.appendChild(headRow);
+  for (const row of sheet.preview_rows) {
+    const tr = document.createElement("tr");
+    for (const cell of row) {
+      const td = document.createElement("td");
+      td.textContent = cell;
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+}
+
+$("clean-btn").addEventListener("click", async () => {
+  clearError();
+  const resp = await fetch("/api/clean/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: cleanState.sessionId,
+      enabled: [...cleanState.enabled],
+    }),
+  });
+  if (!resp.ok) return showError(await apiError(resp));
+  const blob = await resp.blob();
+  const stem = cleanState.filename.replace(/\.[^.]+$/, "");
+  const ext = cleanState.filename.toLowerCase().endsWith(".xlsx") ? "xlsx" : "csv";
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `${stem}.cleaned.${ext}`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+});
+
 // ---- de-redact -----------------------------------------------------------
 
 $("deredact-btn").addEventListener("click", async () => {

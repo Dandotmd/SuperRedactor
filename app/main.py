@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.engine.cleaners import clean
 from app.engine.deredact import deredact_text
 from app.engine.detect import suggest_type
 from app.engine.fakers import REDACTION_TYPES
@@ -37,6 +38,11 @@ class RedactRequest(BaseModel):
 class DeredactRequest(BaseModel):
     mapping: dict
     text: str
+
+
+class CleanRequest(BaseModel):
+    session_id: str
+    enabled: list[str] | None = None
 
 
 @app.post("/api/upload")
@@ -99,6 +105,53 @@ def do_redact(req: RedactRequest):
         content=buf.getvalue(),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{stem}.redacted.zip"'},
+    )
+
+
+def _get_session(session_id: str) -> dict:
+    session = _sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Unknown session — re-upload the file")
+    return session
+
+
+@app.post("/api/clean/analyze")
+def clean_analyze(req: CleanRequest):
+    session = _get_session(req.session_id)
+    enabled = None if req.enabled is None else set(req.enabled)
+    cleaned, findings = clean(session["sheets"], enabled)
+    return {
+        "findings": [vars(f) for f in findings],
+        "sheets": [
+            {
+                "name": s.name,
+                "headers": s.headers,
+                "row_count": len(s.rows),
+                "preview_rows": s.rows[:PREVIEW_ROWS],
+            }
+            for s in cleaned
+        ],
+    }
+
+
+@app.post("/api/clean/apply")
+def clean_apply(req: CleanRequest):
+    session = _get_session(req.session_id)
+    enabled = None if req.enabled is None else set(req.enabled)
+    cleaned, _ = clean(session["sheets"], enabled)
+
+    filename: str = session["filename"]
+    stem = filename.rsplit(".", 1)[0]
+    if filename.lower().endswith(".xlsx"):
+        out_name, out_bytes = f"{stem}.cleaned.xlsx", write_xlsx(cleaned)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        out_name, out_bytes = f"{stem}.cleaned.csv", write_csv(cleaned[0])
+        media = "text/csv"
+    return Response(
+        content=out_bytes,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
     )
 
 

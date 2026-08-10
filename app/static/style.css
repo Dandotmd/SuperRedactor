@@ -123,6 +123,28 @@ td.is-dropped, th.is-dropped .col-name { opacity: 0.35; text-decoration: line-th
 }
 .btn-quiet:hover { color: var(--ink); border-color: var(--ink-soft); }
 
+/* Clean-up findings */
+.findings { display: grid; gap: 0.5rem; margin: 1rem 0; }
+.finding {
+  display: flex; align-items: flex-start; gap: 0.6rem;
+  border: 1px solid var(--line); border-radius: 4px; background: #fff;
+  padding: 0.55rem 0.75rem; cursor: pointer;
+}
+.finding input[type="checkbox"] { margin-top: 0.2rem; accent-color: var(--stamp); }
+.finding-body { flex: 1; }
+.finding-desc { font-size: 0.88rem; font-weight: 600; }
+.finding-sheet { color: var(--ink-soft); font-weight: 400; }
+.finding-samples {
+  margin: 0.25rem 0 0; font-family: var(--font-data); font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+.finding-samples .arrow { color: var(--stamp); }
+.finding.is-off { opacity: 0.55; }
+.all-clear {
+  border-left: 4px solid #2c7a3f; background: #edf6ef; border-radius: 0 4px 4px 0;
+  padding: 0.6rem 0.9rem; font-size: 0.9rem;
+}
+
 /* De-redact panel */
 .panel[hidden] { display: none; }
 .field { display: block; margin: 1rem 0; }
