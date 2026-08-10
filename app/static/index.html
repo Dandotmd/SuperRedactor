@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PII Redactor — local only</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='4' width='14' height='3' fill='%231a1b1c'/%3E%3Crect x='1' y='9' width='9' height='3' fill='%231a1b1c'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <h1>PII&nbsp;Redactor</h1>
+    <span class="stamp" title="The server binds to 127.0.0.1 and makes no outbound requests">Local only</span>
+    <nav class="tabs" role="tablist">
+      <button class="tab is-active" role="tab" aria-selected="true" data-panel="panel-redact">Redact a file</button>
+      <button class="tab" role="tab" aria-selected="false" data-panel="panel-deredact">De-redact AI output</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section id="panel-redact" class="panel is-active" role="tabpanel">
+    <div id="dropzone" class="dropzone" tabindex="0" role="button"
+         aria-label="Choose a CSV or Excel file to redact">
+      <p class="dropzone-title">Drop a CSV or .xlsx file here, or click to choose</p>
+      <p class="dropzone-note">The file is parsed in memory on this machine. Nothing is uploaded anywhere.</p>
+      <input id="file-input" type="file" accept=".csv,.xlsx" hidden>
+    </div>
+
+    <div id="workspace" hidden>
+      <div class="workspace-bar">
+        <span id="file-label" class="file-label"></span>
+        <div id="sheet-tabs" class="sheet-tabs"></div>
+        <button id="reset-btn" class="btn-quiet" type="button">Start over</button>
+      </div>
+      <p class="hint">Set each column to keep, redact, or drop. Suggestions from column
+        names are pre-filled — check every column yourself before downloading.</p>
+      <div class="table-scroll">
+        <table id="preview-table"></table>
+      </div>
+      <div class="actionbar">
+        <p id="redact-summary" class="summary" aria-live="polite"></p>
+        <button id="redact-btn" class="btn-primary" type="button">Redact and download ZIP</button>
+      </div>
+      <p class="hint">The ZIP holds the redacted file plus <code>mapping.json</code> —
+        the key that turns fake values back into real ones. Keep it local, never share it.</p>
+    </div>
+  </section>
+
+  <section id="panel-deredact" class="panel" role="tabpanel" hidden>
+    <p class="hint">Paste text that came back from an AI tool, add the
+      <code>mapping.json</code> from your redaction run, and every fake value
+      is swapped back to the original. This also happens entirely on this machine.</p>
+    <label class="field">
+      <span>mapping.json</span>
+      <input id="mapping-input" type="file" accept=".json">
+    </label>
+    <label class="field">
+      <span>AI output</span>
+      <textarea id="deredact-in" rows="8" placeholder="Paste the AI's answer here"></textarea>
+    </label>
+    <div class="actionbar">
+      <button id="deredact-btn" class="btn-primary" type="button">Restore real values</button>
+    </div>
+    <label class="field">
+      <span>Restored text <button id="copy-btn" class="btn-quiet" type="button" hidden>Copy</button></span>
+      <textarea id="deredact-out" rows="8" readonly placeholder="Result appears here"></textarea>
+    </label>
+  </section>
+
+  <p id="error" class="error" role="alert" hidden></p>
+</main>
+
+<footer>
+  <p>Open source. Runs offline. Redaction covers whole columns — PII hidden inside
+    free-text cells is not detected, so drop those columns if in doubt.</p>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
