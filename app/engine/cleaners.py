@@ -9,9 +9,15 @@ sheets are never mutated.
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
 
 from app.engine.readers import Sheet, _normalize
+from app.engine.safety import is_formula_risk, neutralize
+from app.engine.values import (
+    DECORATED_NUMBER as _DECORATED_NUMBER,
+    PLAIN_NUMBER as _PLAIN_NUMBER,
+    parse_date as _parse_date,
+    strip_number as _strip_number,
+)
 
 MAX_SAMPLES = 3
 _SYNTH_HEADER = re.compile(r"^(extra_)?column_\d+$")
@@ -19,8 +25,6 @@ _NUMERICISH = re.compile(r"^-?[\d,.$()%\s]+$")
 _TRAILING_KEYWORD = re.compile(
     r"^(grand\s+)?total\b|^subtotal\b|^source\b|^notes?\b|^prepared\b", re.IGNORECASE
 )
-_PLAIN_NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
-_DECORATED_NUMBER = re.compile(r"^\(?\$?\s?-?[\d,]+(\.\d+)?\)?%?$")
 
 # Bare "NA" and "None" are deliberately absent: NA is Namibia and North
 # America, None is a real category in allergy and accommodation columns.
@@ -31,10 +35,6 @@ _MISSING_MARKERS = {"n/a", "null", "nan", "#n/a", "#null!", "--"}
 # does it on every download, so it is reported rather than offered.
 ALWAYS_APPLIED = {"formula_injection"}
 
-_DATE_FORMATS = (
-    "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%m-%d-%Y",
-    "%d %b %Y", "%d %B %Y", "%b %d, %Y", "%B %d, %Y", "%d-%b-%Y",
-)
 
 
 @dataclass
@@ -286,15 +286,6 @@ def _detect_missing(rows: list[list[str]]):
     return count, f"{count} cell(s) using markers like N/A or NULL for missing data", samples, fix
 
 
-def _strip_number(value: str) -> str:
-    v = value.strip().replace("$", "").replace(",", "").replace(" ", "")
-    if v.endswith("%"):
-        v = v[:-1]
-    if v.startswith("(") and v.endswith(")"):
-        v = "-" + v[1:-1]
-    return v
-
-
 def _detect_decorated_numbers(headers: list[str], rows: list[list[str]], idx: int):
     values = [r[idx] for r in rows if r[idx].strip()]
     if len(values) < 2:
@@ -316,33 +307,6 @@ def _detect_decorated_numbers(headers: list[str], rows: list[list[str]], idx: in
         samples,
         fix,
     )
-
-
-# Cheap gate before the expensive strptime attempts: a date always starts
-# with a digit or a letter and is short. Without this, every cell in every
-# column pays ten failed parses, which dominated runtime on large files.
-_MAYBE_DATE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ,/-]{5,29}$")
-_DATE_CACHE: dict[str, datetime | None] = {}
-_DATE_CACHE_LIMIT = 100_000
-
-
-def _parse_date(value: str) -> datetime | None:
-    v = value.strip()
-    if not _MAYBE_DATE.match(v):
-        return None
-    cached = _DATE_CACHE.get(v, False)
-    if cached is not False:
-        return cached
-    parsed = None
-    for fmt in _DATE_FORMATS:
-        try:
-            parsed = datetime.strptime(v, fmt)
-            break
-        except ValueError:
-            continue
-    if len(_DATE_CACHE) < _DATE_CACHE_LIMIT:
-        _DATE_CACHE[v] = parsed
-    return parsed
 
 
 def _detect_mixed_dates(headers: list[str], rows: list[list[str]], idx: int):
@@ -373,28 +337,15 @@ def _detect_mixed_dates(headers: list[str], rows: list[list[str]], idx: int):
     )
 
 
-def _is_formula_risk(value: str) -> bool:
-    """Excel executes a cell starting with these characters. A hostile value
-    in a source export can exfiltrate data when the cleaned file is opened,
-    so it is worth neutralizing even though the file 'looks' like data."""
-    if not value:
-        return False
-    if value[0] in "=@\t\r":
-        return True
-    if value[0] in "+-":
-        return not _PLAIN_NUMBER.match(value.strip())
-    return False
-
-
 def _detect_formula_injection(rows: list[list[str]]):
-    risky = [c for row in rows for c in row if _is_formula_risk(c)]
+    risky = [c for row in rows for c in row if is_formula_risk(c)]
     if not risky:
         return None
-    samples = [[c[:40], "'" + c[:40]] for c in risky[:MAX_SAMPLES]]
+    samples = [[c[:40], neutralize(c[:40])] for c in risky[:MAX_SAMPLES]]
 
     def fix():
         for row in rows:
-            row[:] = ["'" + c if _is_formula_risk(c) else c for c in row]
+            row[:] = [neutralize(c) for c in row]
 
     return (
         len(risky),

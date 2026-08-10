@@ -10,9 +10,15 @@ import difflib
 import re
 from dataclasses import dataclass, field
 
-from app.engine.cleaners import _DECORATED_NUMBER, _PLAIN_NUMBER, _parse_date, _strip_number
 from app.engine.detect import suggest_type
 from app.engine.readers import Sheet
+from app.engine.values import (
+    DECORATED_NUMBER,
+    PLAIN_NUMBER,
+    is_ambiguous_date,
+    parse_date,
+    strip_number,
+)
 
 TEMPLATE_VERSION = 1
 
@@ -69,12 +75,12 @@ def _tokens(header: str) -> set[str]:
 def _guess_type(values: list[str]) -> str:
     filled = [v for v in values if v.strip()]
     if len(filled) >= 3:
-        if sum(1 for v in filled if _parse_date(v)) / len(filled) >= 0.8:
+        if sum(1 for v in filled if parse_date(v)) / len(filled) >= 0.8:
             return "date"
     if len(filled) >= 2:
         numeric = sum(
             1 for v in filled
-            if _PLAIN_NUMBER.match(v.strip()) or _DECORATED_NUMBER.match(v.strip())
+            if PLAIN_NUMBER.match(v.strip()) or DECORATED_NUMBER.match(v.strip())
         )
         if numeric / len(filled) >= 0.8:
             return "number"
@@ -206,33 +212,19 @@ def suggest_sources(
     return suggestions
 
 
-# 05/06/2024 is the 5th of June in most of the world and the 6th of May in
-# the US. Both readings parse, so the only honest thing is to say which one
-# was used.
-_AMBIGUOUS_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/\d{2,4}$")
-
-
-def _is_ambiguous_date(value: str) -> bool:
-    match = _AMBIGUOUS_DATE.match(value.strip())
-    if not match:
-        return False
-    first, second = int(match.group(1)), int(match.group(2))
-    return first <= 12 and second <= 12 and first != second
-
-
 def _coerce(value: str, col_type: str) -> str | None:
     """Returns the coerced value, or None when the cell can't be coerced."""
     v = value.strip()
     if not v:
         return value
     if col_type == "date":
-        d = _parse_date(v)
+        d = parse_date(v)
         return d.strftime("%Y-%m-%d") if d else None
     if col_type == "number":
-        if _PLAIN_NUMBER.match(v):
+        if PLAIN_NUMBER.match(v):
             return v
-        if _DECORATED_NUMBER.match(v):
-            return _strip_number(v)
+        if DECORATED_NUMBER.match(v):
+            return strip_number(v)
         return None
     return value
 
@@ -298,7 +290,7 @@ def apply_template(
                 failed[name] = failed.get(name, 0) + 1
                 out_row.append(value)
             else:
-                if col_type == "date" and _is_ambiguous_date(value):
+                if col_type == "date" and is_ambiguous_date(value):
                     ambiguous[name] = ambiguous.get(name, 0) + 1
                 out_row.append(coerced)
         rows.append(out_row)
