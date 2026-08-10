@@ -50,6 +50,17 @@ def test_generated_values_are_unique_within_generator():
     assert len(set(fakes)) == 200
 
 
+def test_saturated_space_still_yields_unique_values_quickly():
+    import time
+
+    gen = FakeGenerator("format_preserving")
+    start = time.monotonic()
+    # single-digit space has only 10 possible fakes; the rest must de-collide
+    fakes = [gen.next(str(i % 10)) for i in range(2000)]
+    assert len(set(fakes)) == 2000
+    assert time.monotonic() - start < 2.0
+
+
 def test_unknown_type_raises():
     import pytest
 

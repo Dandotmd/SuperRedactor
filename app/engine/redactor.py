@@ -22,7 +22,9 @@ def redact(sheets: list[Sheet], config: Config) -> tuple[list[Sheet], Mapping]:
     out: list[Sheet] = []
 
     def fake_for(col_type: str, real: str) -> str:
-        gen = generators.setdefault(col_type, FakeGenerator(col_type))
+        gen = generators.get(col_type)
+        if gen is None:
+            gen = generators[col_type] = FakeGenerator(col_type)
         values = by_type.setdefault(col_type, {})
         if real not in values:
             values[real] = gen.next(real)

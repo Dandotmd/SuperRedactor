@@ -79,6 +79,16 @@ def test_mapping_records_real_to_fake():
     assert set(mapping["Students"]["id"]) == {"101", "102", "103"}
 
 
+def test_large_file_redacts_in_reasonable_time():
+    import time
+
+    rows = [[f"2020-{(i % 12) + 1:02d}-01", str(i)] for i in range(20_000)]
+    sheets = [Sheet(name="S", headers=["date", "score"], rows=rows)]
+    start = time.monotonic()
+    redact(sheets, {"S": {"date": "date"}})
+    assert time.monotonic() - start < 3.0
+
+
 def test_unknown_column_in_config_raises():
     import pytest
 
