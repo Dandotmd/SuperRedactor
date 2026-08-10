@@ -36,7 +36,9 @@ VALUE_MAKERS = {
 
 
 def _random_sheet(rng: random.Random, name: str) -> tuple[Sheet, dict[str, str]]:
-    types = rng.sample(sorted(VALUE_MAKERS), rng.randint(1, 4))
+    # Types may repeat: every column of a type draws from one shared pool of
+    # fakes, and only picking distinct types hid exactly that bug once.
+    types = [rng.choice(sorted(VALUE_MAKERS)) for _ in range(rng.randint(1, 4))]
     headers = [f"col_{i}_{t}" for i, t in enumerate(types)]
     rows = []
     for _ in range(rng.randint(1, 40)):
@@ -118,6 +120,41 @@ def test_one_fake_never_means_two_people_in_random_files():
                         f"case {case}: fake {fake!r} stands for both "
                         f"{fakes[fake]!r} and {key!r}"
                     )
+
+
+def test_columns_sharing_a_pool_are_warned_before_any_value_is_reused():
+    """Spread one type over several columns and sheets until the pool is
+    crowded. Reuse is allowed there — silence is not."""
+    # The small pools are the ones a real roster crowds; larger ones would
+    # only make the suite slow.
+    rng = random.Random(1234)
+    for col_type, pool_hint in [("first_name", 690), ("last_name", 1000)]:
+        for columns in (2, 3, 4):
+            # Half the pool: past the warning threshold, and far cheaper to
+            # sample than approaching exhaustion.
+            per_column = max(1, int(pool_hint * 0.5) // columns)
+            values: set[str] = set()
+            while len(values) < per_column * columns:
+                values.add(VALUE_MAKERS[col_type](FAKER))
+            ordered = sorted(values)
+
+            headers = [f"col{i}" for i in range(columns)]
+            rows = [
+                [ordered[c * per_column + r] for c in range(columns)]
+                for r in range(per_column)
+            ]
+            sheets = [Sheet(name="S", headers=headers, rows=rows)]
+            config = {"S": {h: col_type for h in headers}}
+
+            redacted, _ = redact(sheets, config)
+            produced = {c.strip() for row in redacted[0].rows for c in row if c.strip()}
+            reused = produced & set(ordered)
+            if reused:
+                assert find_weak_columns(sheets, config), (
+                    f"{col_type} over {columns} columns: {len(reused)} real "
+                    f"values reused with no warning"
+                )
+            _ = rng  # deterministic ordering only
 
 
 def test_values_from_dropped_columns_are_never_handed_out_as_fakes():
