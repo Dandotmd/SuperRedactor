@@ -64,9 +64,13 @@ def redact(
                 col_type, issued=issued, forbidden=forbidden
             )
         values = by_type.setdefault(col_type, {})
-        if real not in values:
-            values[real] = gen.next(real)
-        return values[real]
+        # Keyed by normalized value so "Ada Lovelace", "  Ada Lovelace  "
+        # and "ADA LOVELACE" are one person with one replacement — anything
+        # else breaks joins and burns three entries of the fake pool.
+        key = normalize_value(real)
+        if key not in values:
+            values[key] = gen.next(real)
+        return values[key]
 
     for sheet in sheets:
         sheet_config = config.get(sheet.name, {})

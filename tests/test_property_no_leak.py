@@ -12,6 +12,7 @@ import random
 
 from faker import Faker
 
+from app.engine.fakers import normalize_value
 from app.engine.leakcheck import find_weak_columns
 from app.engine.readers import Sheet
 from app.engine.redactor import redact
@@ -106,13 +107,16 @@ def test_one_fake_never_means_two_people_in_random_files():
             continue
 
         _, mapping = redact(sheets, config)
+        # Several spellings of one value legitimately share a fake; two
+        # genuinely different values must never.
         fakes: dict[str, str] = {}
         for columns in mapping.values():
             for pairs in columns.values():
                 for real, fake in pairs.items():
-                    assert fakes.setdefault(fake, real) == real, (
+                    key = normalize_value(real)
+                    assert fakes.setdefault(fake, key) == key, (
                         f"case {case}: fake {fake!r} stands for both "
-                        f"{fakes[fake]!r} and {real!r}"
+                        f"{fakes[fake]!r} and {key!r}"
                     )
 
 

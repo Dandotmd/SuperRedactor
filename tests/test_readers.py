@@ -137,6 +137,35 @@ def test_year_columns_are_still_a_heading_row():
     assert sheets[0].rows[0] == ["Ada", "88", "91"]
 
 
+def test_coded_column_headings_stay_headings():
+    # Budget, clinical and education exports name columns like this
+    for header in (
+        b"FY2023,FY2024,FY2025",
+        b"ICD-10-CM,DESCRIPTION",
+        b"GRADE9,GRADE10",
+        b"NAICS2017,TITLE",
+        b"IEP504,COUNT",
+        b"SY2023-24,ENROLLMENT",
+        b"CY2024,PY2023",
+        b"Name,FY2024",
+    ):
+        data = header + b"\nAlpha,1\nBravo,2\nCharlie,3\n"
+        sheets = read_file("x.csv", data)
+        expected = header.decode().split(",")
+        assert sheets[0].headers == expected, header
+
+
+def test_record_identifiers_still_mean_the_row_is_data():
+    data = (
+        b"H0AK00105,LAMB THOMAS,AK\n"
+        b"H0AL01055,CARL JERRY,AL\n"
+        b"H2AK01158,BEGICH NICK,AK\n"
+    )
+    sheets = read_file("cn.csv", data)
+    assert sheets[0].headers[0] == "column_1"
+    assert len(sheets[0].rows) == 3
+
+
 def test_mostly_numeric_first_row_is_data():
     data = b"101,88,91\n102,75,80\n103,95,99\n"
     sheets = read_file("x.csv", data)

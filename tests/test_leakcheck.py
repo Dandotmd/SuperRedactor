@@ -152,6 +152,40 @@ def test_exact_matches_are_found_beyond_the_first_20000_values():
     assert leaks and leaks[0].count == 3
 
 
+def test_two_redacted_columns_quoted_in_one_cell_are_both_reported():
+    sheets = [
+        Sheet(
+            name="S",
+            headers=["Student", "Guardian", "Notes"],
+            rows=[
+                ["Ida Wells", "Marcus Grey", "Ida Wells with Marcus Grey"],
+                ["Bo Diddley", "Cleo Rand", "Bo Diddley with Cleo Rand"],
+                ["Cy Young", "Ada Ray", "nothing"],
+            ],
+        )
+    ]
+    leaks = find_leaks(
+        sheets, {"S": {"Student": "person_name", "Guardian": "person_name"}}
+    )
+    reported = {leak.redacted_column for leak in leaks}
+    assert reported == {"Student", "Guardian"}, reported
+
+
+def test_odd_internal_spacing_in_the_real_value_still_matches():
+    sheets = [
+        Sheet(
+            name="S",
+            headers=["Student", "Notes"],
+            rows=[
+                ["Ida  Wells", "spoke to Ida Wells"],
+                ["Bo Diddley", "nothing"],
+                ["Cy Young", "nothing"],
+            ],
+        )
+    ]
+    assert find_leaks(sheets, {"S": {"Student": "person_name"}})
+
+
 def test_large_file_completes_quickly():
     import time
 

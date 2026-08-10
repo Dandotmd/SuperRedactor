@@ -120,6 +120,53 @@ def test_reused_real_names_are_always_warned_about_first():
             )
 
 
+def test_two_columns_of_one_type_share_the_pool_and_are_warned_together():
+    """The generator draws every column of a type from one pool, so two
+    200-name columns crowd it exactly as much as one 400-name column."""
+    from faker import Faker
+
+    from app.engine.leakcheck import find_weak_columns
+    from app.engine.readers import Sheet
+
+    faker = Faker()
+    pool: set[str] = set()
+    while len(pool) < 400:
+        pool.add(faker.first_name())
+    names = sorted(pool)
+
+    sheets = [
+        Sheet(
+            name="S",
+            headers=["Student First", "Guardian First"],
+            rows=[[names[i], names[i + 200]] for i in range(200)],
+        )
+    ]
+    config = {"S": {"Student First": "first_name", "Guardian First": "first_name"}}
+
+    warned = find_weak_columns(sheets, config)
+    assert set(warned) == {"Student First", "Guardian First"}, warned
+
+
+def test_columns_of_one_type_spread_over_sheets_are_warned():
+    from faker import Faker
+
+    from app.engine.leakcheck import find_weak_columns
+    from app.engine.readers import Sheet
+
+    faker = Faker()
+    pool: set[str] = set()
+    while len(pool) < 500:
+        pool.add(faker.first_name())
+    names = sorted(pool)
+
+    sheets = [
+        Sheet(name="A", headers=["First"], rows=[[n] for n in names[:250]]),
+        Sheet(name="B", headers=["First"], rows=[[n] for n in names[250:]]),
+    ]
+    config = {"A": {"First": "first_name"}, "B": {"First": "first_name"}}
+    assert find_weak_columns(sheets, config)
+
+
 def test_no_real_first_name_is_reused_at_school_roster_size():
     """400 distinct first names is an ordinary school. The generator's pool
     is smaller than that, so this must either avoid every real value or say

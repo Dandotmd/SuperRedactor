@@ -144,15 +144,22 @@ _STRONG_VALUE_SHAPES = (
 
 
 def _is_record_code(text: str) -> bool:
-    """A record identifier like H0AK00105 or EMP-00412 — letters and digits
-    run together. Column headings are words; this shape is data."""
+    """A record identifier like H0AK00105 — a long code with letters and
+    digits interleaved.
+
+    Coded column headings look similar at a glance (FY2023, ICD-10-CM,
+    NAICS2017, SY2023-24) and mistaking one for data throws the real
+    headings into the rows. What separates them is that a heading is a word
+    followed by a number, while an identifier goes back to letters after
+    its digits and carries more of them.
+    """
     core = text.replace("-", "").replace("_", "")
-    return (
-        len(core) >= 6
-        and core.isalnum()
-        and core.upper() == core
-        and sum(c.isdigit() for c in core) >= 2
-        and any(c.isalpha() for c in core)
+    if len(core) < 8 or not core.isalnum() or core.upper() != core:
+        return False
+    if sum(c.isdigit() for c in core) < 5 or not any(c.isalpha() for c in core):
+        return False
+    return any(
+        core[i].isalpha() and core[i - 1].isdigit() for i in range(1, len(core))
     )
 # Weak shapes are ordinary numbers, which are also perfectly good column
 # names in wide-format exports ("Name, 2023, 2024"), so they only count as

@@ -5,14 +5,23 @@ import re
 # A leading "=" is a formula in every spreadsheet program and never
 # legitimate data, so it is enough on its own.
 #
-# A leading +, - or @ is different: it opens most real phone numbers
+# A leading +, - or @ is different: it opens real phone numbers
 # (+44 20 7946 0000), negative money (-$40.00), scientific notation
-# (-1.5e10) and social handles (@example.com). Flagging all of those
+# (-1.5e10), social handles (@example.com) and no end of note-column prose
+# ("-Smith (deceased)", "- see notes (p. 3)"). Flagging all of those
 # rewrote ordinary columns on every download. What turns them into an
-# attack is the syntax that follows — a function call, a DDE pipe, or a
-# sheet reference — so that is what is looked for.
-_EXECUTABLE_SYNTAX = re.compile(r"[(|!]")
-_HAS_LETTER = re.compile(r"[A-Za-z]")
+# attack is specific syntax:
+#   |          a DDE pipe, as in cmd|'/c calc'
+#   NAME(      a function call, letters running straight into a bracket
+#   !A1        a sheet or cell reference
+# Prose has spaces where formulas do not, which is what separates
+# "@SUM(A1)" from "@johndoe (Twitter)".
+_EXECUTABLE_SYNTAX = re.compile(r"\||[A-Za-z]\(|![A-Za-z$]")
+
+# Every kind of blank a spreadsheet ignores in front of a formula,
+# including the invisible ones a hostile file would use to slip past.
+_LEADING_BLANKS = "\t\r\n\v\f         "
+_LEADING_BLANKS += "     ​  　﻿"
 
 
 def is_formula_risk(value: str) -> bool:
@@ -24,14 +33,13 @@ def is_formula_risk(value: str) -> bool:
     """
     if not value:
         return False
-    text = value.lstrip("\t\r\n")
+    text = value.lstrip(_LEADING_BLANKS)
     if not text:
         return False
     if text[0] == "=":
         return True
     if text[0] in "+-@":
-        rest = text[1:]
-        return bool(_EXECUTABLE_SYNTAX.search(rest) and _HAS_LETTER.search(rest))
+        return bool(_EXECUTABLE_SYNTAX.search(text[1:]))
     return False
 
 

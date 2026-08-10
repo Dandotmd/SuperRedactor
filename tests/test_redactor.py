@@ -41,6 +41,22 @@ def test_redacted_values_are_replaced():
     assert out[0].rows[0][0] != "101"
 
 
+def test_spelling_variants_of_one_person_get_the_same_fake():
+    # Padding and capitalisation don't make a different student, and giving
+    # them different fakes breaks joins between sheets
+    sheets = [
+        Sheet(
+            name="S",
+            headers=["name"],
+            rows=[["Ada Lovelace"], ["  Ada Lovelace  "], ["ADA LOVELACE"], ["Bob Ray"]],
+        )
+    ]
+    out, _ = redact(sheets, {"S": {"name": "person_name"}})
+    produced = [r[0] for r in out[0].rows]
+    assert produced[0] == produced[1] == produced[2]
+    assert produced[3] != produced[0]
+
+
 def test_same_value_maps_to_same_fake_within_column():
     out, _ = redact(sample_sheets(), config())
     assert out[0].rows[0][1] == out[0].rows[2][1]  # both "Sarah Chen"

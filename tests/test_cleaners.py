@@ -141,6 +141,23 @@ def test_strips_currency_and_thousands_separators():
     assert [r[1] for r in cleaned[0].rows] == ["A1", "B2", "C3"]
 
 
+def test_european_decimal_comma_is_left_alone():
+    # "2,5" means two and a half in much of the world; stripping the comma
+    # would silently multiply it by ten
+    sheets = [sheet(["Amount"], [["2,5"], ["10,25"], ["3,75"]])]
+    findings = analyze(sheets)
+    assert by_kind(findings, "numbers_as_text") == []
+    cleaned = apply_fixes(sheets, finding_ids(findings))
+    assert [r[0] for r in cleaned[0].rows] == ["2,5", "10,25", "3,75"]
+
+
+def test_thousands_separators_are_still_stripped():
+    sheets = [sheet(["Amount"], [["1,234.56"], ["2,500"], ["900"]])]
+    findings = analyze(sheets)
+    cleaned = apply_fixes(sheets, finding_ids(findings))
+    assert [r[0] for r in cleaned[0].rows] == ["1234.56", "2500", "900"]
+
+
 def test_plain_number_column_untouched():
     sheets = [sheet(["Score"], [["88"], ["91"], ["75"]])]
     assert by_kind(analyze(sheets), "numbers_as_text") == []

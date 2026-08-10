@@ -69,6 +69,26 @@ def test_template_does_not_remember_values_of_personal_columns():
     assert columns["Program"]["values"] == ["Housing", "Treatment"]
 
 
+def test_template_does_not_remember_clinical_or_free_text_values():
+    sheet = Sheet(
+        name="S",
+        headers=["Diagnosis", "Medication", "Notes", "Program"],
+        rows=[
+            ["Asthma", "Albuterol", "stable", "Housing"],
+            ["Diabetes", "Metformin", "stable", "Housing"],
+            ["Asthma", "Albuterol", "review", "Care"],
+            ["Diabetes", "Metformin", "review", "Care"],
+            ["Asthma", "Albuterol", "stable", "Housing"],
+            ["Diabetes", "Metformin", "stable", "Care"],
+        ],
+    )
+    template = make_template(sheet, name="t")
+    columns = {c["name"]: c for c in template["columns"]}
+    for sensitive in ("Diagnosis", "Medication", "Notes"):
+        assert "values" not in columns[sensitive], sensitive
+    assert columns["Program"]["values"] == ["Care", "Housing"]
+
+
 def test_template_reports_which_columns_carry_example_values():
     session = upload(
         "visits.csv",

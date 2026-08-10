@@ -91,6 +91,14 @@ ORDINARY_VALUES = [
     "-",                    # dash placeholder
     "--",
     "-Q3 result",           # a leading dash on prose
+    "-Smith (deceased)",    # notes columns are full of these
+    "- N/A (not collected)",
+    "- see notes (p. 3)",
+    "+1 (555) 123-4567 ext. x12",
+    "+1 (800) FLOWERS",
+    "-Late (excused)",
+    "- Urgent!",
+    "@johndoe (Twitter)",
 ]
 
 
@@ -118,8 +126,15 @@ def test_command_payloads_are_still_caught():
         "=HYPERLINK(\"http://x\")",
         "@cmd|calc",
         "\t=cmd|calc",
+        # Whitespace before the payload must not slip past
+        " =cmd|'/c calc'!A1",
+        " =cmd|calc",   # non-breaking space
+        "​=cmd|calc",   # zero-width space
+        "\v=cmd|calc",
+        "\f=cmd|calc",
+        " =SUM(A1)",    # figure space
     ]:
-        assert is_formula_risk(value), value
+        assert is_formula_risk(value), repr(value)
 
 
 def test_negative_currency_is_recognized_as_a_number():

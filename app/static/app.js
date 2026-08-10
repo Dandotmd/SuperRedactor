@@ -366,12 +366,18 @@ function renderRedactTable() {
 /** Checking for leftovers means scanning the file, so it waits for the
  *  user to stop changing dropdowns. */
 let redactCheckTimer = null;
+let redactCheckToken = 0;
 function scheduleRedactCheck() {
   clearTimeout(redactCheckTimer);
   redactCheckTimer = setTimeout(runRedactCheck, 350);
 }
 
 async function runRedactCheck() {
+  // The scan takes seconds on a large file, so two can be in flight at
+  // once. Only the newest may draw — otherwise a slow earlier reply can
+  // paint a stale all-clear over a fresh warning.
+  const token = ++redactCheckToken;
+  const isStale = () => token !== redactCheckToken;
   const holder = $("redact-warnings");
   if (!state.sessionId || $("redact-btn").disabled) {
     holder.innerHTML = "";
@@ -392,6 +398,7 @@ async function runRedactCheck() {
       config: state.config,
     });
   } catch {
+    if (isStale()) return;
     // A failed check must not look like a clean one — silence is the only
     // all-clear this screen gives.
     holder.innerHTML = "";
@@ -403,6 +410,7 @@ async function runRedactCheck() {
     holder.appendChild(p);
     return;
   }
+  if (isStale()) return;
   holder.innerHTML = "";
 
   if (!body.leaks.length && !body.weak_columns.length) {

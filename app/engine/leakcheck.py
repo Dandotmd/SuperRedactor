@@ -36,8 +36,15 @@ class Leak:
     samples: list[str] = field(default_factory=list)
 
 
+def _key(value: str) -> str:
+    """The form two spellings of the same value share. Runs of whitespace
+    collapse so 'Ida  Wells' in the roster still matches 'Ida Wells' in a
+    sentence."""
+    return " ".join(value.split()).casefold()
+
+
 def _redacted_values(sheets, config) -> dict[str, dict[str, str]]:
-    """Lowercased value -> {column: original spelling} for every column
+    """Normalized value -> {column: original spelling} for every column
     being redacted, across every sheet."""
     values: dict[str, dict[str, str]] = {}
     for sheet in sheets:
@@ -48,7 +55,7 @@ def _redacted_values(sheets, config) -> dict[str, dict[str, str]]:
             for row in sheet.rows:
                 cell = row[index].strip()
                 if cell:
-                    values.setdefault(cell.casefold(), {}).setdefault(column, cell)
+                    values.setdefault(_key(cell), {}).setdefault(column, cell)
     return values
 
 
@@ -108,34 +115,54 @@ def _scan_column(sheet, index: int, tracked, quotable):
         cell = row[index].strip()
         if not cell:
             continue
-        key = cell.casefold()
+        key = _key(cell)
         if key in tracked:
             record(key)
             continue
         if quotable and row_number < MAX_SUBSTRING_ROWS:
-            for window in _windows(cell.casefold()):
-                if window in quotable:
+            # One sentence can quote values from several redacted columns;
+            # stopping at the first match hid the rest.
+            seen: set[str] = set()
+            for window in _windows(key):
+                if window in quotable and window not in seen:
+                    seen.add(window)
                     record(window)
-                    break
     return hits
 
 
 def find_weak_columns(sheets, config: dict[str, dict[str, str]]) -> list[str]:
-    """Columns whose possible replacements are too few to hide anything —
-    a 400-name roster is larger than the generator's list of first names,
-    so some replacements would be other people's real names."""
-    from app.engine.fakers import CROWDED_FRACTION, estimate_pool
+    """Columns whose possible replacements are too few to hide anyone.
 
-    weak: list[str] = []
+    Counted per replacement *type*, not per column: every column of a type
+    draws from the same pool of fake values, so two 200-name columns crowd
+    the list of first names exactly as much as one 400-name column. Judging
+    each column alone let an ordinary two-column roster exhaust the pool
+    while both columns sat under the threshold.
+    """
+    from app.engine.fakers import CROWDED_FRACTION, estimate_pool, normalize_value
+
+    values_by_type: dict[str, set[str]] = {}
+    columns_by_type: dict[str, list[str]] = {}
     for sheet in sheets:
         for column, action in config.get(sheet.name, {}).items():
             if action == "drop" or column not in sheet.headers:
                 continue
             index = sheet.headers.index(column)
-            values = {row[index].strip() for row in sheet.rows if row[index].strip()}
-            if not values:
-                continue
-            if len(values) >= estimate_pool(action, values) * CROWDED_FRACTION:
+            values = values_by_type.setdefault(action, set())
+            for row in sheet.rows:
+                cell = normalize_value(row[index])
+                if cell:
+                    values.add(cell)
+            names = columns_by_type.setdefault(action, [])
+            if column not in names:
+                names.append(column)
+
+    weak: list[str] = []
+    for col_type, values in values_by_type.items():
+        if not values:
+            continue
+        if len(values) >= estimate_pool(col_type, values) * CROWDED_FRACTION:
+            for column in columns_by_type[col_type]:
                 if column not in weak:
                     weak.append(column)
     return weak

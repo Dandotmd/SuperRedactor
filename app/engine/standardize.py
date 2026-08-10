@@ -27,6 +27,19 @@ TEMPLATE_VERSION = 1
 MAX_VOCABULARY = 12
 MAX_DISTINCT_RATIO = 0.5
 
+# Templates get committed to repositories and emailed around, and the
+# values they remember are copied out of a real file. Columns holding
+# health or free-text information never remember anything, on top of the
+# name/address columns the PII detector already recognises.
+_NEVER_REMEMBERED = {
+    "diagnosis", "diagnoses", "condition", "conditions", "medication",
+    "medications", "med", "meds", "prescription", "allergy", "allergies",
+    "treatment", "procedure", "symptom", "symptoms", "disability",
+    "notes", "note", "comment", "comments", "remarks", "description",
+    "reason", "complaint", "religion", "ethnicity", "race", "gender",
+    "sex", "orientation", "income", "salary", "wage",
+}
+
 
 @dataclass
 class StandardizeResult:
@@ -112,7 +125,8 @@ def make_template(sheet: Sheet, name: str) -> dict:
     for i, header in enumerate(sheet.headers):
         values = [row[i] for row in sheet.rows]
         column = {"name": header, "type": _guess_type(values)}
-        if column["type"] == "text" and suggest_type(header) is None:
+        sensitive = bool(_tokens(header) & _NEVER_REMEMBERED)
+        if column["type"] == "text" and suggest_type(header) is None and not sensitive:
             vocabulary = _guess_vocabulary(values)
             if vocabulary:
                 column["values"] = vocabulary

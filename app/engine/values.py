@@ -11,7 +11,13 @@ from datetime import datetime
 
 PLAIN_NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
 # $1,234.56 · (2,500) · 45% · -$1,000.50 · $-40.00
-DECORATED_NUMBER = re.compile(r"^\(?-?\$?\s?-?[\d,]+(\.\d+)?\)?%?$")
+#
+# Commas must group three digits at a time. "2,5" is two and a half in most
+# of the world, and stripping its comma would silently multiply it by ten,
+# so a lone comma before one or two digits is not treated as a number here.
+DECORATED_NUMBER = re.compile(
+    r"^\(?-?\$?\s?-?\d{1,3}(,\d{3})*(\.\d+)?\)?%?$|^\(?-?\$?\s?-?\d+(\.\d+)?\)?%?$"
+)
 
 DATE_FORMATS = (
     "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%m-%d-%Y",

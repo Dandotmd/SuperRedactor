@@ -28,6 +28,21 @@ def test_date_headers():
     assert suggest_type("date_of_service") == "date"
 
 
+def test_common_short_name_headers():
+    for header in ("First", "Last", "FName", "LName", "Forename"):
+        assert suggest_type(header) in ("first_name", "last_name"), header
+
+
+def test_person_role_headers_are_treated_as_names():
+    for header in ("Patient", "Student", "Guardian", "Employee", "Client",
+                   "Parent", "Teacher", "Emergency Contact"):
+        assert suggest_type(header) == "person_name", header
+
+
+def test_cell_is_a_phone_column():
+    assert suggest_type("Cell") == "phone"
+
+
 def test_non_pii_headers_get_no_suggestion():
     assert suggest_type("Score") is None
     assert suggest_type("Status") is None
