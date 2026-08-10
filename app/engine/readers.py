@@ -401,16 +401,11 @@ def _has_header(first_row: list[str], body: list[list[str]] | None = None) -> bo
     if heading_evidence:
         return True
 
-    # Nothing to compare against: fall back to shapes no one names a
-    # column after, then to a majority of number-like cells.
-    if any(_looks_like_a_value(cell) for cell in filled):
-        return False
-    weak = sum(
-        1
-        for cell in filled
-        if not _YEAR.match(cell) and _numberish(cell)
-    )
-    return weak / len(filled) < _WEAK_MAJORITY
+    # No column could be compared and nothing in the row names a column.
+    # Assume a record: mistaking a heading row for data costs the column
+    # names and redacts a row of labels, while mistaking a record for a
+    # heading puts a real person in a row redaction never touches.
+    return False
 
 
 def _read_csv(data: bytes) -> Sheet:
