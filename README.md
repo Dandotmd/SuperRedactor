@@ -1,45 +1,58 @@
 # SuperRedactor
 
-A local web app that scrubs sensitive columns from CSV and Excel files before
-you share them with AI tools — and translates the AI's answers back afterward.
+A local web app for getting spreadsheets ready to share with AI tools when the
+data is too sensitive to upload. It runs on your own computer, in your browser,
+and never sends anything anywhere.
 
-You pick the columns; each one is replaced with **realistic fake data** (fake
-names stay names, fake SSNs look like SSNs, IDs keep their exact format), so
-the file keeps its structure and anything an AI builds against it works
-unchanged on the real data. A `mapping.json` produced with each run lets you
-swap the fake values back to the originals — locally, whenever you need to.
+It does four things:
+
+| | |
+|---|---|
+| **Redact personal info** | Replace names, emails, SSNs and other personal columns with realistic fake data. You get a key file to turn the fakes back into real values later. |
+| **Clean up a file** | Fix a badly exported spreadsheet: title rows above the headings, totals at the bottom, duplicates, stray spaces, `N/A` markers, `$1,234`-style numbers, mixed date formats. |
+| **Standardize** | Make files from different systems come out with the same columns in the same order, every time, using a template you save once. |
+| **Restore real values** | Turn the fake values in an AI's answer back into the real ones. |
+
+You can pass a file from one step to the next without re-uploading it.
 
 **Everything runs on your machine. Nothing is uploaded anywhere, ever.**
 
 ## Why
 
 If you work with regulated or confidential data (FERPA, HIPAA, PII covered by
-the Privacy Act, or plain "don't leak the customer list"), you can't paste
-real exports into an AI tool. But you still want AI help building dashboards,
-scripts, and analyses around that data. Redact first, build against the
-fakes, de-redact the results.
+the Privacy Act, or plain "don't leak the customer list"), you can't paste real
+exports into an AI tool. But you still want AI help building dashboards,
+scripts, and analyses around that data. Redact first, build against the fakes,
+restore the results.
+
+Because the fake data is realistic — fake names stay names, fake SSNs look like
+SSNs, IDs keep their exact format — anything the AI builds against the redacted
+file works unchanged on the real one.
 
 ## Privacy & security posture
 
-Designed so that a security reviewer can verify every claim by reading a
-small amount of code:
+Designed so a security reviewer can verify every claim by reading a small
+amount of code:
 
 - **Localhost only.** The server binds to `127.0.0.1:8321` and is unreachable
   from the network.
 - **Zero outbound requests.** No telemetry, no update checks, no CDN scripts,
-  no font downloads. The web page is fully self-contained; the codebase
-  contains no HTTP client.
+  no font downloads. The page is fully self-contained; the codebase contains
+  no HTTP client.
 - **No server-side persistence.** Uploaded files live in process memory only
-  and vanish when the server stops. Nothing is written to disk except the
-  ZIP you explicitly download.
+  and vanish when the server stops. Nothing is written to disk except the file
+  you explicitly download.
 - **Small, auditable dependency list**: FastAPI, uvicorn, python-multipart,
-  openpyxl, Faker. The redaction engine itself (`app/engine/`) is pure
-  Python with no web dependencies.
-- **The mapping is the key.** `mapping.json` is the only path from fake
-  values back to real ones. Treat it with the same care as the source data;
-  never share it or upload it.
+  openpyxl, Faker. The engine (`app/engine/`) is pure Python with no web
+  dependencies.
+- **Formula injection is neutralized.** Cells starting with `=`, `+`, `-` or
+  `@` can execute when a CSV is opened in Excel. Clean up detects them and
+  makes them safe as text.
+- **The key file is the risk.** `mapping.json` is the only path from fake
+  values back to real ones. Treat it exactly like the source data: keep it on
+  your machine, never attach it to the file you're sharing.
 
-## Install & run (standard machine)
+## Install & run
 
 Requires Python 3.10 or newer. No admin rights needed.
 
@@ -52,10 +65,10 @@ pip install -e .
 superredactor
 ```
 
-Your browser opens at `http://127.0.0.1:8321`. Stop the server with `Ctrl+C`;
-everything it held in memory is gone.
+Your browser opens at `http://127.0.0.1:8321`. Stop it with `Ctrl+C` in the
+terminal; everything it held in memory is gone.
 
-Prefer not to install at all? `pip install -e .` once, or run directly:
+Equivalent, without installing the command:
 
 ```bash
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8321
@@ -63,8 +76,8 @@ Prefer not to install at all? `pip install -e .` once, or run directly:
 
 ## Install on locked-down / government computers
 
-You often can't run arbitrary installers or reach the open internet from a
-work machine. Options, in order of preference:
+You often can't run arbitrary installers or reach the open internet from a work
+machine. Options, in order of preference:
 
 **1. No git? Download a ZIP.**
 On GitHub, *Code → Download ZIP*, transfer it by your approved method, unzip,
@@ -72,8 +85,8 @@ and follow the normal steps — git is not required to run the tool.
 
 **2. Python without admin rights.**
 The python.org installer supports a per-user install (no elevation), or use
-whatever your agency's software center provides. Any CPython 3.10+ works.
-On Windows, if `python3` isn't found, try `py -3` or `python`.
+whatever your agency's software center provides. Any CPython 3.10+ works. On
+Windows, if `python3` isn't found, try `py -3` or `python`.
 
 **3. pip behind a corporate proxy / TLS inspection.**
 If `pip install` fails with certificate errors, your agency likely intercepts
@@ -87,7 +100,7 @@ Set `HTTPS_PROXY` if your network requires it. Do **not** disable certificate
 verification.
 
 **4. Fully offline (air-gapped) install.**
-On any internet-connected machine with the same OS/Python major version:
+On any internet-connected machine with the same OS and Python major version:
 
 ```bash
 pip download -d wheels .
@@ -102,97 +115,94 @@ pip install --no-index --find-links wheels -e .
 
 **5. Verify before you trust.**
 The claims above are checkable: `grep` the codebase for `http` — the only
-network code is the uvicorn server bound to `127.0.0.1`. Run `pytest` to see
-the whole engine exercised. Your agency's rules for handling the *source*
-data still apply to the machine you run this on and to `mapping.json`.
+network code is the uvicorn server bound to `127.0.0.1`. Run `pytest` to
+exercise the whole engine. Your agency's rules for handling the *source* data
+still apply to the machine you run this on and to `mapping.json`.
 
 > SuperRedactor is an independent open-source tool. It is not produced or
-> endorsed by any government agency. Redacting a file does not by itself
-> make it releasable — follow your organization's data-handling policy.
+> endorsed by any government agency. Redacting a file does not by itself make
+> it releasable — follow your organization's data-handling policy.
 
 ## Using it
 
-1. **Drop in a `.csv` or `.xlsx`** (all sheets are loaded). Delimiters
-   (comma, pipe, tab, semicolon), Latin-1/Windows encodings, ragged rows,
-   and headerless files (e.g. FEC bulk data) are handled automatically.
-2. **Review the columns.** Likely PII columns are pre-marked from their
-   header names — always check every column yourself; the suggestions are
-   heuristics, not a guarantee.
-3. Set each column to **Keep**, **Redact as** a type (name, email, phone,
-   SSN, address, date, number, format-preserving ID, …), or **Drop**.
-   Marked columns preview as black redaction bars.
-4. **Download the ZIP**: the redacted file plus `<name>.mapping.json`.
-5. Use the redacted file with your AI tool. When the AI's output mentions
-   fake values, open the **De-redact** tab, load the mapping, paste the
-   output, and get the real values back.
+Files can be `.csv` or `.xlsx` (also `.tsv`, `.txt`, `.xlsm`). Odd delimiters
+(comma, pipe, tab, semicolon), Latin-1/Windows encodings, ragged rows, and
+files with no header row are all handled automatically. Legacy `.xls` is not
+supported — open it in Excel and save as `.xlsx` first.
 
-Consistency: within a run, the same real value always becomes the same fake
-value — including across sheets — so joins between sheets keep working.
+### Redact personal info
 
-### Cleaning up a messy file
+1. Drop in your file. Columns that look personal are pre-marked from their
+   names — **check every column yourself**; the suggestions are heuristics.
+2. Set each column to keep, replace with a type of fake data, or remove.
+   Marked columns preview as black bars.
+3. Download the ZIP: your redacted file plus `mapping.json`.
 
-The **Clean up a file** tab repairs badly exported spreadsheets before you
-work with them. Drop a file in and every problem found becomes a checked
-fix card with a before → after sample:
+Within one run the same real value always becomes the same fake value —
+including across sheets — so joins between sheets keep working.
 
-- junk rows above the real header (report titles, "Generated by…" lines)
-- summary/footnote rows at the bottom ("Total", "Source: …")
-- completely empty rows and columns
-- exact duplicate rows (first kept)
-- stray whitespace and non-breaking spaces
-- `N/A` / `NULL` / `--` markers turned into truly empty cells
-- numbers stored as text — `$1,234.56` and `(2,500)` become `1234.56`
-  and `-2500` (only when most of a column matches)
-- mixed date formats normalized to `YYYY-MM-DD` (ambiguous dates are read
-  as US month/day — uncheck that card if your file is day-first)
+### Clean up a file
 
-Uncheck anything you disagree with — the preview updates live — then
-download the cleaned file in the same format you gave it. Detection is
-deliberately conservative: sheets with fewer than three populated columns
-are left alone rather than guessed at.
+Every problem found becomes a ticked fix card with a before → after sample:
+junk rows above the real header, summary/footnote rows at the bottom, blank
+rows and columns, exact duplicates, stray and non-breaking whitespace,
+`N/A`/`NULL`/`--` markers, numbers stored as text (`$1,234.56` → `1234.56`,
+`(2,500)` → `-2500`), mixed date formats normalized to `YYYY-MM-DD`, and cells
+that would run as Excel formulas.
 
-### Standardizing files to one layout
+Untick anything you disagree with — the preview updates live — then download.
+Detection is deliberately conservative: sheets with fewer than three populated
+columns are left alone rather than guessed at, and ambiguous dates are read as
+US month/day (the fix card says so, so you can untick it).
 
-The **Standardize** tab makes files from different systems come out in one
-shape, so every downstream script or AI tool sees the same schema.
+### Standardize
 
-*Make a template*: drop in a file that already has the layout you want.
-Its column names, order, and auto-guessed types (text / date / number)
-are saved as a small portable `template.json` — no cell data, just the
-schema. Commit it to a repo or share it with your team as the standard.
+*Make a template*: drop in a file that already has the layout you want. Its
+column names, order, and types (text / dates / numbers) are saved as a small
+portable `template.json` — no cell data. Columns that repeat a short list of
+values (a status, a category) also remember that list. Commit the template to
+a repo or share it as your team's standard.
 
-*Apply a template*: load a `template.json`, drop in a file from any
-system, and review the proposed mapping. Columns are auto-matched by
-normalized names, a synonym table (`DOB` = `Date of Birth` = `BirthDate`),
-shared tokens (`ID` → `student_id`, `Student Name` → `name`), and fuzzy
-matching for typos. Template columns with no source stay in the output as
-empty columns with a visible warning; extra source columns are dropped
-unless you tick *keep*. Values are coerced to the template's types (dates
-→ `YYYY-MM-DD`, `$1,234` → `1234`); cells that don't fit are left intact
-and counted in a warning, never silently blanked. Preview, then download
-`file.standardized.csv/xlsx`.
+*Apply a template*: load a `template.json`, drop in a file from any system, and
+review the proposed mapping. Columns are auto-matched by normalized names, a
+synonym table (`DOB` = `Date of Birth` = `BirthDate`), shared tokens (`ID` →
+`student_id`), and fuzzy matching for typos. Then:
+
+- Template columns with no source come through empty, with a visible warning.
+- Extra source columns are dropped unless you tick *keep it*.
+- Values are coerced to the template's types; anything that doesn't fit is left
+  intact and counted in a warning, never silently blanked.
+- Spelling variants of remembered values are tidied up (`ACTIVE`, ` Inactive `,
+  `In-Active` → `active` / `inactive`). Values that don't match are **never
+  guessed** — `active` and `inactive` look similar but mean opposites. They are
+  listed for you to map by hand, or left alone.
+
+### Restore real values
+
+Load the `mapping.json` from your redaction run, paste the AI's answer, and
+every fake value becomes the original again. If nothing matches, it tells you —
+usually a sign the key is from a different run.
 
 ## Limits — read before trusting it
 
-- **Whole columns only.** PII buried inside free-text cells ("Spoke with
-  Sarah's mother…") is **not** detected. Drop those columns if in doubt.
+- **Whole columns only.** Personal details written inside free text ("Spoke
+  with Sarah's mother…") are **not** detected. Remove those columns if unsure.
 - Redacted values are random fakes, not anonymization with formal guarantees.
-  Rare combinations of the columns you *keep* (age + zip + diagnosis, say)
-  can still identify someone. You remain responsible for what you share.
+  Rare combinations of the columns you *keep* (age + zip + diagnosis, say) can
+  still identify someone. You remain responsible for what you share.
 - Excel output is values-only: formulas and cell formatting are not preserved
-  (sheets, columns, and rows are). Legacy `.xls` isn't supported — re-save
-  as `.xlsx` or CSV first.
-- Each run generates a fresh mapping; there is no cross-file or cross-run
+  (sheets, columns, and rows are).
+- Each run generates a fresh key file; there is no cross-file or cross-run
   consistency.
+- Standardize works one sheet at a time (pick the sheet with the tabs).
 
 ## Tested against real federal data
 
-The parser is exercised against public bulk datasets, including: CDC NNDSS
+The parser is exercised against public bulk datasets, including CDC NNDSS
 (101 MB) and provisional COVID-19 deaths, Census county population estimates
-(Latin-1 encoded) and state XLSX tables (merged headers), FEC candidate
-master (pipe-delimited, no header row), FEMA disaster declarations, IRS
-migration data, and Treasury debt data. All parse, redact, and round-trip
-cleanly.
+(Latin-1 encoded) and state XLSX tables, the FEC candidate master
+(pipe-delimited, no header row), FEMA disaster declarations, IRS migration
+data, and Treasury debt data. All parse, redact, and round-trip cleanly.
 
 ## Development
 
@@ -201,15 +211,15 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Engine (`app/engine/`) is pure Python; the FastAPI layer (`app/main.py`) and
-the static page are thin wrappers over it. Tests are written first; PRs
-should keep it that way.
+The engine (`app/engine/`) is pure Python; the FastAPI layer (`app/main.py`)
+and the static page are thin wrappers over it. Tests are written first; please
+keep it that way.
 
 ## Roadmap
 
-- Free-text PII scanning inside cells (Microsoft Presidio)
-- Date shifting that preserves intervals
-- CLI mode and saved redaction profiles
+- Detecting personal details inside free-text cells (Microsoft Presidio)
+- Date shifting that preserves intervals between dates
+- Command-line mode and saved redaction profiles
 - Excel formatting preservation
 
 ## License
