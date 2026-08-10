@@ -1,0 +1,64 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+# One in-flight run per branch: a superseded push has nothing left to tell us.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Every version reports for itself: knowing 3.10 alone is broken is
+      # worth more than the minute cancelling the rest would save.
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Full suite
+        run: pytest -q
+
+      # A tie broken by set iteration order once made heading detection
+      # depend on the hash seed, and every developer machine happened to
+      # agree. Fixed seeds make that disagreement reproducible.
+      - name: Full suite under fixed hash seeds
+        shell: bash
+        run: |
+          set -euo pipefail
+          for hash_seed in 0 1 42; do
+            echo "::group::PYTHONHASHSEED=$hash_seed"
+            PYTHONHASHSEED=$hash_seed pytest -q
+            echo "::endgroup::"
+          done
+
+      # The property tests draw new data every run — real leaks have shown
+      # up on the 2nd and the 10th attempt, never the 1st. Each run prints
+      # its seed, so a red repeat here can be replayed exactly.
+      - name: Property tests, ten fresh draws
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            echo "::group::property tests, attempt $attempt"
+            pytest -q tests/test_property_no_leak.py
+            echo "::endgroup::"
+          done

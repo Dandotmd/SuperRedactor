@@ -6,6 +6,11 @@
 Every specific leak found so far had its own regression test. This covers
 the shapes nobody thought to try — random column types, multi-sheet files,
 drop-and-replace combinations, duplicate and near-duplicate values.
+
+The data is different every run, on purpose. Each test takes its randomness
+from the `seeded` fixture in `tests/conftest.py`, which records the seed and
+prints it, and every failure below names the command that brings that exact
+data back. See "Replaying a failing property test" in the README.
 """
 
 import random
@@ -16,8 +21,6 @@ from app.engine.fakers import normalize_value
 from app.engine.leakcheck import find_weak_columns
 from app.engine.readers import Sheet
 from app.engine.redactor import redact
-
-FAKER = Faker()
 
 VALUE_MAKERS = {
     "person_name": lambda f: f.name(),
@@ -35,7 +38,9 @@ VALUE_MAKERS = {
 }
 
 
-def _random_sheet(rng: random.Random, name: str) -> tuple[Sheet, dict[str, str]]:
+def _random_sheet(
+    rng: random.Random, faker: Faker, name: str
+) -> tuple[Sheet, dict[str, str]]:
     # Types may repeat: every column of a type draws from one shared pool of
     # fakes, and only picking distinct types hid exactly that bug once.
     types = [rng.choice(sorted(VALUE_MAKERS)) for _ in range(rng.randint(1, 4))]
@@ -44,7 +49,7 @@ def _random_sheet(rng: random.Random, name: str) -> tuple[Sheet, dict[str, str]]
     for _ in range(rng.randint(1, 40)):
         row = []
         for t in types:
-            value = VALUE_MAKERS[t](FAKER)
+            value = VALUE_MAKERS[t](faker)
             if rng.random() < 0.15:  # empties, padding and case variants
                 value = rng.choice(["", " ", value.upper(), f"  {value} "])
             row.append(value)
@@ -64,7 +69,7 @@ def _random_sheet(rng: random.Random, name: str) -> tuple[Sheet, dict[str, str]]
     return Sheet(name=name, headers=headers, rows=rows), config
 
 
-def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row():
+def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row(seeded):
     """Heading cells are never redacted, so a record mistaken for the
     headings ships in the clear. Generated across the column shapes real
     exports open with — ids, money, dates, codes, names — because each
@@ -72,7 +77,7 @@ def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row():
     from app.engine.readers import read_file
     from app.engine.writers import write_csv
 
-    rng = random.Random(602214)
+    faker = seeded.faker
     first_column = [
         lambda i: f"{100 + i}",               # 3-digit id
         lambda i: f"{1000 + i}",              # 4-digit id
@@ -88,8 +93,8 @@ def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row():
         lambda i: f"H0AK{i:05d}",             # long record code
         lambda i: f"AB-{100 + i}",            # short code
         lambda i: f"P{1000 + i}X",
-        lambda i: FAKER.ssn(),
-        lambda i: FAKER.email(),
+        lambda i: faker.ssn(),
+        lambda i: faker.email(),
         lambda i: f"2024-03-{(i % 28) + 1:02d}",
         lambda i: f"3/{(i % 28) + 1}/2024",
         lambda i: f"Mar {(i % 28) + 1}, 2024",       # text month
@@ -108,7 +113,7 @@ def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row():
         for width in (2, 3, 4, 6, 9):
             rows = [
                 [vary(make_first(i), i)]
-                + [FAKER.name(), "Ms. Smith", f"Grade {i % 6}", "Approved", "x"][
+                + [faker.name(), "Ms. Smith", f"Grade {i % 6}", "Approved", "x"][
                     : width - 1
                 ]
                 for i in range(6)
@@ -121,9 +126,8 @@ def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row():
             parsed = read_file("roster.csv", data)[0]
             assert len(parsed.rows) == 6, (
                 f"case {case} width {width}: record one became the heading "
-                f"{parsed.headers}"
+                f"{parsed.headers}" + seeded.replay
             )
-            _ = rng
 
 
 def test_an_all_text_headerless_file_keeps_its_first_record():
@@ -162,19 +166,19 @@ def test_an_all_text_heading_row_with_no_label_words_is_the_known_tradeoff():
     assert labelled.headers == ["Student", "Teacher"]
 
 
-def test_no_removed_value_is_ever_handed_back_as_a_replacement():
+def test_no_removed_value_is_ever_handed_back_as_a_replacement(seeded):
     """A value the user deleted must never reappear as another row's fake,
     whatever type either column is. Case matters here: identifiers compare
     case-sensitively, and protecting a removed value under only one of the
     two comparison forms let uppercase codes come straight back."""
     from app.engine.fakers import normalize_value
 
-    rng = random.Random(31337)
+    rng, faker = seeded.rng, seeded.faker
     for case in range(200):
         removed_type = rng.choice(sorted(VALUE_MAKERS))
         kept_type = rng.choice(sorted(VALUE_MAKERS))
-        values = [VALUE_MAKERS[removed_type](FAKER) for _ in range(rng.randint(5, 40))]
-        rows = [[VALUE_MAKERS[kept_type](FAKER), v] for v in values]
+        values = [VALUE_MAKERS[removed_type](faker) for _ in range(rng.randint(5, 40))]
+        rows = [[VALUE_MAKERS[kept_type](faker), v] for v in values]
         sheets = [Sheet(name="S", headers=["keep", "gone"], rows=rows)]
         config = {"S": {"keep": kept_type, "gone": "drop"}}
 
@@ -188,17 +192,17 @@ def test_no_removed_value_is_ever_handed_back_as_a_replacement():
         }
         assert not (produced & removed), (
             f"case {case} ({removed_type} removed, {kept_type} kept): "
-            f"{sorted(produced & removed)[:3]} came back"
+            f"{sorted(produced & removed)[:3]} came back" + seeded.replay
         )
 
 
-def test_no_real_value_survives_random_redactions():
-    rng = random.Random(20260810)
+def test_no_real_value_survives_random_redactions(seeded):
+    rng, faker = seeded.rng, seeded.faker
     for case in range(300):
         sheets = []
         config = {}
         for s in range(rng.randint(1, 3)):
-            sheet, columns = _random_sheet(rng, f"Sheet{s}")
+            sheet, columns = _random_sheet(rng, faker, f"Sheet{s}")
             sheets.append(sheet)
             if columns:
                 config[sheet.name] = columns
@@ -219,17 +223,17 @@ def test_no_real_value_survives_random_redactions():
                 produced = {r[out_index].strip() for r in out.rows if r[out_index].strip()}
                 assert not (produced & real), (
                     f"case {case}: {column} emitted real values "
-                    f"{sorted(produced & real)[:3]} with no warning"
+                    f"{sorted(produced & real)[:3]} with no warning" + seeded.replay
                 )
 
 
-def test_one_fake_never_means_two_people_in_random_files():
-    rng = random.Random(4242)
+def test_one_fake_never_means_two_people_in_random_files(seeded):
+    rng, faker = seeded.rng, seeded.faker
     for case in range(200):
         sheets = []
         config = {}
         for s in range(rng.randint(1, 3)):
-            sheet, columns = _random_sheet(rng, f"Sheet{s}")
+            sheet, columns = _random_sheet(rng, faker, f"Sheet{s}")
             sheets.append(sheet)
             if columns:
                 config[sheet.name] = columns
@@ -246,16 +250,16 @@ def test_one_fake_never_means_two_people_in_random_files():
                     key = normalize_value(real)
                     assert fakes.setdefault(fake, key) == key, (
                         f"case {case}: fake {fake!r} stands for both "
-                        f"{fakes[fake]!r} and {key!r}"
+                        f"{fakes[fake]!r} and {key!r}" + seeded.replay
                     )
 
 
-def test_columns_sharing_a_pool_are_warned_before_any_value_is_reused():
+def test_columns_sharing_a_pool_are_warned_before_any_value_is_reused(seeded):
     """Spread one type over several columns and sheets until the pool is
     crowded. Reuse is allowed there — silence is not."""
     # The small pools are the ones a real roster crowds; larger ones would
     # only make the suite slow.
-    rng = random.Random(1234)
+    faker = seeded.faker
     for col_type, pool_hint in [("first_name", 690), ("last_name", 1000)]:
         for columns in (2, 3, 4):
             # Half the pool: past the warning threshold, and far cheaper to
@@ -263,7 +267,7 @@ def test_columns_sharing_a_pool_are_warned_before_any_value_is_reused():
             per_column = max(1, int(pool_hint * 0.5) // columns)
             values: set[str] = set()
             while len(values) < per_column * columns:
-                values.add(VALUE_MAKERS[col_type](FAKER))
+                values.add(VALUE_MAKERS[col_type](faker))
             ordered = sorted(values)
 
             headers = [f"col{i}" for i in range(columns)]
@@ -280,12 +284,11 @@ def test_columns_sharing_a_pool_are_warned_before_any_value_is_reused():
             if reused:
                 assert find_weak_columns(sheets, config), (
                     f"{col_type} over {columns} columns: {len(reused)} real "
-                    f"values reused with no warning"
+                    f"values reused with no warning" + seeded.replay
                 )
-            _ = rng  # deterministic ordering only
 
 
-def test_values_from_dropped_columns_are_never_handed_out_as_fakes():
+def test_values_from_dropped_columns_are_never_handed_out_as_fakes(seeded):
     """A removed column's values are data the user chose to delete, so no
     replacement anywhere may come back as one of them.
 
@@ -295,9 +298,9 @@ def test_values_from_dropped_columns_are_never_handed_out_as_fakes():
     """
     from app.engine.fakers import normalize_value
 
-    rng = random.Random(99)
+    rng, faker = seeded.rng, seeded.faker
     for case in range(100):
-        sheet, config = _random_sheet(rng, "S")
+        sheet, config = _random_sheet(rng, faker, "S")
         dropped = [c for c, a in config.items() if a == "drop"]
         if not dropped:
             continue
@@ -319,6 +322,9 @@ def test_values_from_dropped_columns_are_never_handed_out_as_fakes():
         }
         assert not (invented & removed), (
             f"case {case}: removed values {sorted(invented & removed)[:3]} "
-            f"came back as replacements"
+            f"came back as replacements" + seeded.replay
         )
-        assert all(c not in redacted[0].headers for c in dropped)
+        assert all(c not in redacted[0].headers for c in dropped), (
+            f"case {case}: a dropped column survived in the headings"
+            + seeded.replay
+        )

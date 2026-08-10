@@ -1,5 +1,7 @@
 # SuperRedactor
 
+[![tests](https://github.com/Dandotmd/SuperRedactor/actions/workflows/tests.yml/badge.svg)](https://github.com/Dandotmd/SuperRedactor/actions/workflows/tests.yml)
+
 A local web app for getting spreadsheets ready to share with AI tools when the
 data is too sensitive to upload. It runs on your own computer, in your browser,
 and never sends anything anywhere.
@@ -287,6 +289,41 @@ they cover. Beyond the happy paths they pin down the failures that matter:
 `tools/stress_test.py <dir>` runs any folder of real spreadsheets through the
 whole pipeline and reports crashes, row-count changes, and slow files. The
 docstring lists the public federal datasets used below.
+
+Every push and pull request runs the whole suite on Python 3.10 through 3.13,
+then runs it again under three fixed `PYTHONHASHSEED` values (a tie broken by
+set iteration order once made heading detection depend on the hash seed), then
+runs the property tests ten more times over fresh data.
+
+### Replaying a failing property test
+
+The property tests generate new data on every run — that is why they keep
+finding things — so a failure would normally be gone before you could look at
+it. Each run therefore picks a **run seed** and prints it at the end, passing
+or failing:
+
+```
+---------------------------- randomized test seeds -----------------------------
+run seed 3508916842 (drawn fresh this run)
+   4753008895798990429  tests/test_property_no_leak.py::test_a_headerless_file_...
+replay: SUPERREDACTOR_TEST_SEED=3508916842 pytest tests/
+```
+
+Set `SUPERREDACTOR_TEST_SEED` to that number and the same files come back, cell
+for cell:
+
+```bash
+SUPERREDACTOR_TEST_SEED=3508916842 pytest tests/test_property_no_leak.py
+```
+
+Every failure message ends with the exact command for the test that failed, so
+you can copy it straight out of a CI log. Each test derives its own seed from
+the run seed and its node id, so replaying one test on its own gives it the
+same data it had in the full run. The derivation is a SHA-256 digest rather
+than `hash()`, so it does not move with `PYTHONHASHSEED`.
+
+Leave the variable unset — as CI does — and every run explores data nobody has
+tried before.
 
 ## Tested against real federal data
 
