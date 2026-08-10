@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 
 from openpyxl import load_workbook
 
+from app.engine.headings import has_header
+
 # A single cell can legitimately hold a pasted document; the stdlib default
 # of 128 KB rejects those outright.
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
@@ -190,226 +192,6 @@ def mixed_delimiter_headings(sheet: Sheet) -> str | None:
     return sheet.rival_delimiter
 
 
-# Getting this wrong in the "it's a header" direction is dangerous: the
-# header row is not part of the data, so nothing in it is ever redacted. A
-# roster whose first person is mistaken for the headings would ship their
-# name and SSN inside a file labelled "redacted".
-#
-# Strong shapes are things no one names a column after — one is enough.
-_STRONG_VALUE_SHAPES = (
-    re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$"),  # ada@school.edu
-    re.compile(r"^\+?[\d][\d\s().-]{6,}$"),          # 111-22-3333, phone
-    re.compile(r"^\d{5,}$"),                         # long id run
-    re.compile(r"^\d{4}-\d{2}-\d{2}"),               # 2024-03-12
-    re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}$"),        # 3/12/2024
-)
-
-
-def _is_record_code(text: str) -> bool:
-    """A record identifier like H0AK00105 — a long code with letters and
-    digits interleaved.
-
-    Coded column headings look similar at a glance (FY2023, ICD-10-CM,
-    NAICS2017, SY2023-24) and mistaking one for data throws the real
-    headings into the rows. What separates them is that a heading is a word
-    followed by a number, while an identifier goes back to letters after
-    its digits and carries more of them.
-    """
-    core = text.replace("-", "").replace("_", "")
-    if len(core) < 8 or not core.isalnum() or core.upper() != core:
-        return False
-    if sum(c.isdigit() for c in core) < 5 or not any(c.isalpha() for c in core):
-        return False
-    return any(
-        core[i].isalpha() and core[i - 1].isdigit() for i in range(1, len(core))
-    )
-# Weak shapes are ordinary numbers, which are also perfectly good column
-# names in wide-format exports ("Name, 2023, 2024"), so they only count as
-# evidence when most of the row looks that way.
-_WEAK_VALUE_SHAPES = (
-    re.compile(r"^-?[\d,.]+$"),      # 1,234.50
-    re.compile(r"^[$€£]\s?[\d,]+"),  # $1,234
-)
-_YEAR = re.compile(r"^(19|20)\d{2}$")
-_WEAK_MAJORITY = 0.5
-
-
-def _is_unambiguous_value(cell: str) -> bool:
-    """Shapes that are never a column name in any file: an address, a
-    phone number, a social security number, a date. One is enough to say
-    the row is a record — no comparison needed, and no comparison can
-    argue with it."""
-    from app.engine.values import parse_date
-
-    text = cell.strip()
-    if not text:
-        return False
-    return bool(
-        any(shape.match(text) for shape in _STRONG_VALUE_SHAPES) or parse_date(text)
-    )
-
-
-def _looks_like_a_value(cell: str) -> bool:
-    text = cell.strip()
-    if not text:
-        return False
-    return _is_record_code(text) or _is_unambiguous_value(text)
-
-
-def _numberish(cell: str) -> bool:
-    text = cell.strip()
-    return bool(text) and any(shape.match(text) for shape in _WEAK_VALUE_SHAPES)
-
-
-_DIGIT_RUN = re.compile(r"\d+")
-# Any script's letters, not just A-Z: a Cyrillic or CJK column otherwise
-# compares as punctuation and its first record gets read as a heading.
-_LETTER_RUN = re.compile(r"[^\W\d_]+", re.UNICODE)
-_NUMERIC_CLASS = re.compile(r"^[^A-Za-z]*\d[\d\s,.$€£¥%()+-]*$")
-
-# Values that mean "nothing here" — neither a heading nor a record, so they
-# should not vote either way.
-_NO_VOTE = {
-    "", "-", "--", "n/a", "na", "null", "none", "nan", "pending", "tbd",
-    "unknown", "withheld", "redacted", "exempt", "n.a.", "not collected",
-}
-
-# Words that name a column and are almost never a person's data. One is
-# enough to settle the row, which is what a reader does at a glance: seeing
-# "Name" tells you the row labels the columns, however the other cells look.
-_HEADING_WORDS = {
-    "name", "names", "id", "ids", "identifier", "code", "codes", "number",
-    "no", "num", "date", "dates", "time", "year", "month", "day", "email",
-    "mail", "phone", "tel", "mobile", "cell", "fax", "address", "street",
-    "city", "town", "state", "province", "county", "country", "region",
-    "zip", "zipcode", "postcode", "amount", "total", "subtotal", "count",
-    "sum", "score", "grade", "rank", "rate", "price", "cost", "value",
-    "notes", "note", "comment", "comments", "description", "desc", "title",
-    "type", "category", "status", "gender", "sex", "age", "dob", "ssn",
-    "first", "last", "middle", "surname", "initials", "salary", "wage",
-    "department", "dept", "division", "unit", "school", "district",
-    "student", "patient", "client", "employee", "staff", "member", "row",
-    "item", "product", "quantity", "qty", "unitprice", "term", "semester",
-    "program", "course", "section", "teacher", "provider", "diagnosis",
-}
-
-
-# Words that can stand beside a heading word without changing what the
-# cell is: "Emergency Contact Name", "Date of Birth".
-_HEADING_QUALIFIERS = {
-    "of", "the", "and", "or", "per", "by", "at", "in", "on", "for",
-    "emergency", "primary", "secondary", "home", "work", "mailing",
-    "billing", "current", "previous", "former", "full", "short", "legal",
-    "preferred", "birth", "start", "end", "due", "paid", "billed", "net",
-    "gross", "guardian", "parent", "contact", "next", "kin", "line",
-}
-
-
-def _names_a_column(cell: str) -> bool:
-    """Whether this cell reads as a label rather than a value.
-
-    The whole cell has to be made of labelling words: 'Client Name' does,
-    'ada@school.edu' does not, even though it contains 'school'.
-    """
-    text = cell.strip()
-    # A label doesn't carry a number: "Grade" names a column, "Grade 5" is
-    # somebody's grade.
-    if not text or "@" in text or len(text) > 40 or _DIGIT_RUN.search(text):
-        return False
-    tokens = [t for t in _LETTER_RUN.findall(text.lower()) if t]
-    if not tokens or len(tokens) > 4:
-        return False
-    return bool(set(tokens) & _HEADING_WORDS) and set(tokens) <= (
-        _HEADING_WORDS | _HEADING_QUALIFIERS
-    )
-
-
-def _skeleton(value: str) -> str:
-    """A value's character-class pattern, digits kept at their own length.
-
-    '(555) 555-1000' -> '(999) 999-9999', 'AB-100' -> 'a-999',
-    'Mar 1, 2024' -> 'a 9, 9999'. Comparing skeletons says whether the
-    first row is built like the rows beneath it without needing a rule per
-    format — enumerating formats is how phone numbers, percentages and
-    text-month dates each got missed in turn. Digit length matters: '2023'
-    over two-digit scores names a year column, while '2001' over 2002 and
-    2003 is a record's own id.
-    """
-    text = _LETTER_RUN.sub("a", value.strip())
-    return _DIGIT_RUN.sub(lambda m: "9" * len(m.group()), text)
-
-
-def _has_header(first_row: list[str], body: list[list[str]] | None = None) -> bool:
-    """Whether the first row names the columns or is the first record.
-
-    Guessing "heading" when it is really a record is the dangerous
-    direction — heading cells are never redacted, so that person ships in
-    the clear. So the first row is compared against the column beneath it,
-    and only when that comparison says nothing do the shape tables decide.
-    """
-    filled = [c.strip() for c in first_row if c.strip()]
-    if not filled:
-        return True
-    # A word that names a column settles it outright — "Name" over "Ada"
-    # is what a reader actually goes on, and no shape comparison can see it.
-    if any(_names_a_column(cell) for cell in filled):
-        return True
-    if not body:
-        # One row on its own: a record if it says so, otherwise assume an
-        # export that produced headings and no rows, which is far more
-        # common and is rejected rather than processed.
-        return not any(_is_unambiguous_value(cell) for cell in filled)
-    if any(_is_unambiguous_value(cell) for cell in filled):
-        return False
-
-    heading_evidence = data_evidence = 0
-    for index, cell in enumerate(first_row):
-        text = cell.strip()
-        if text.lower() in _NO_VOTE:
-            continue
-        column = [
-            row[index].strip()
-            for row in (body or [])[:20]
-            if index < len(row) and row[index].strip().lower() not in _NO_VOTE
-        ]
-        if not column:
-            continue
-
-        # A column of numbers is the clearest signal there is, and it holds
-        # even when the numbers are different lengths — "7" belongs above
-        # 1234 as surely as 1001 does.
-        if all(_NUMERIC_CLASS.match(v) for v in column):
-            if _NUMERIC_CLASS.match(text):
-                data_evidence += 1
-            else:
-                heading_evidence += 1
-            continue
-
-        shapes = {_skeleton(v) for v in column}
-        if len(shapes) != 1:
-            # A column whose own values disagree about their shape says
-            # nothing about the row above it — and picking a "most common"
-            # shape made the answer depend on the hash seed.
-            continue
-        if _skeleton(text) in shapes:
-            data_evidence += 1
-        # A mismatch here is not evidence of a heading. Text varies on its
-        # own — "Mrs. Emma Smith MD" is shaped differently from "Amy Kane"
-        # and is still a name. Only a column of numbers, or a word that
-        # names a column, says the row above is a heading.
-
-    if data_evidence and data_evidence >= heading_evidence:
-        return False
-    if heading_evidence:
-        return True
-
-    # No column could be compared and nothing in the row names a column.
-    # Assume a record: mistaking a heading row for data costs the column
-    # names and redacts a row of labels, while mistaking a record for a
-    # heading puts a real person in a row redaction never touches.
-    return False
-
-
 def _read_csv(data: bytes) -> Sheet:
     text = _decode(data)
     head = text.lstrip()[:200].lower()
@@ -422,7 +204,7 @@ def _read_csv(data: bytes) -> Sheet:
     delimiter, rival = _sniff_delimiter(text)
     reader = csv.reader(io.StringIO(text), delimiter=delimiter)
     rows = [row for row in reader if row]
-    if rows and _has_header(rows[0], rows[1:]):
+    if rows and has_header(rows[0], rows[1:]):
         headers, body = rows[0], rows[1:]
     else:
         headers = [f"column_{i + 1}" for i in range(len(rows[0]) if rows else 0)]
@@ -458,7 +240,7 @@ def _read_xlsx(data: bytes) -> list[Sheet]:
     sheets = []
     header_rows: dict[str, int] = {}
     for title, rows in parsed:
-        if rows and _has_header(rows[0], rows[1:]) and any(c.strip() for c in rows[0]):
+        if rows and has_header(rows[0], rows[1:]) and any(c.strip() for c in rows[0]):
             header_rows[title] = 1
             headers, body = rows[0], rows[1:]
         else:
