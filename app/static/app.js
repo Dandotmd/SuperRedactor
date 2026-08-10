@@ -377,6 +377,14 @@ async function runRedactCheck() {
     holder.innerHTML = "";
     return;
   }
+  // On a large file the scan takes a couple of seconds. Say so, rather
+  // than leaving an empty pane that reads like an all-clear.
+  const checking = document.createElement("p");
+  checking.className = "hint";
+  checking.textContent = "Checking whether any values you are replacing appear elsewhere…";
+  holder.innerHTML = "";
+  holder.appendChild(checking);
+
   let body;
   try {
     body = await api("/api/redact/check", {
