@@ -1,0 +1,30 @@
+[project]
+name = "pii-redactor"
+version = "0.1.0"
+description = "Local web app to redact/scramble PII columns in CSV and Excel files before sharing with AI tools"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    "openpyxl>=3.1",
+    "faker>=24.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.scripts]
+pii-redactor = "app.main:run"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app", "app.engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
