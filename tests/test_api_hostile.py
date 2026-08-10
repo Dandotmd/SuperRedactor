@@ -138,6 +138,43 @@ def test_template_without_columns_is_rejected():
         assert resp.status_code == 400, bad
 
 
+def test_hand_edited_template_with_odd_value_lists_does_not_crash():
+    session_id = upload("x.csv")
+    for values in ([1, 2, 3], [None], [{"a": 1}], "notalist"):
+        resp = client.post(
+            "/api/standardize/preview",
+            json={
+                "session_id": session_id,
+                "template": {
+                    "kind": "template",
+                    "columns": [{"name": "name", "type": "text", "values": values}],
+                },
+                "mapping": {"name": "name"},
+                "keep_extras": [],
+            },
+        )
+        assert resp.status_code in (200, 400), (values, resp.status_code)
+
+
+def test_hand_edited_template_with_odd_aliases_does_not_crash():
+    session_id = upload("x.csv")
+    resp = client.post(
+        "/api/standardize/preview",
+        json={
+            "session_id": session_id,
+            "template": {
+                "kind": "template",
+                "columns": [
+                    {"name": "name", "type": "text", "values": ["a"], "aliases": {"b": 7}}
+                ],
+            },
+            "mapping": {"name": "name"},
+            "keep_extras": [],
+        },
+    )
+    assert resp.status_code in (200, 400)
+
+
 def test_mapping_to_a_missing_column_is_rejected():
     session_id = upload("x.csv")
     template = make_template()
@@ -152,6 +189,26 @@ def test_mapping_to_a_missing_column_is_rejected():
     )
     assert resp.status_code == 400
     assert "Not A Column" in resp.json()["detail"]
+
+
+def test_the_session_you_are_working_in_is_not_evicted_by_later_uploads():
+    working = upload("mine.csv")
+    for i in range(20):
+        upload(f"other{i}.csv")
+        # touching the working session should keep it alive
+        assert (
+            client.post("/api/clean/analyze", json={"session_id": working}).status_code
+            == 200
+        ), f"evicted after {i + 1} other uploads"
+
+
+def test_safe_stem_strips_control_characters_and_leading_dots():
+    from app.main import _safe_stem
+
+    assert "\x00" not in _safe_stem("a\x00b.csv")
+    assert not _safe_stem("...").startswith(".")
+    assert not _safe_stem("....csv").startswith(".")
+    assert _safe_stem("  .. ") == "file"
 
 
 def test_run_picks_a_free_port_when_the_default_is_busy():

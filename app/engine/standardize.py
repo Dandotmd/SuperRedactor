@@ -233,9 +233,10 @@ def _vocabulary_lookup(col: dict) -> dict[str, str]:
     """Normalized spelling -> canonical value. Only exact-after-normalization
     matches are used; near-miss values are never guessed at, because
     'active' and 'inactive' are textually similar but opposite in meaning."""
-    lookup = {_norm(v): v for v in col.get("values", [])}
-    for alias, canonical in col.get("aliases", {}).items():
-        lookup[_norm(alias)] = canonical
+    lookup = {_norm(v): v for v in col.get("values") or [] if isinstance(v, str)}
+    for alias, canonical in (col.get("aliases") or {}).items():
+        if isinstance(alias, str) and isinstance(canonical, str):
+            lookup[_norm(alias)] = canonical
     return lookup
 
 

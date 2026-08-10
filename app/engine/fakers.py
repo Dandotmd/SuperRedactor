@@ -130,21 +130,29 @@ class FakeGenerator:
         return fake
 
 
-# Roughly how many different values each generator can produce. Used to warn
-# — before anything is downloaded — that a column has too few possibilities
-# to actually hide anyone. Deliberately conservative.
+# How many different values each generator can actually produce. Measured
+# against this Faker version rather than estimated — the first guess put
+# first names at 3,000 when the real list holds 690, so a 400-name roster
+# reused real names with no warning at all.
+#
+#   for name in (...): len({f.first_name() for _ in range(60_000)})
 _POOL_SIZES = {
-    "person_name": 1_000_000,
-    "first_name": 3_000,
+    "person_name": 400_000,   # first x last combinations, measured low
+    "first_name": 690,
     "last_name": 1_000,
     "email": 1_000_000,
     "phone": 10_000_000,
     "ssn": 1_000_000,
     "address": 1_000_000,
-    "city": 1_000,
+    "city": 28_000,
     "date": 10_000,
-    "custom_word": 1_000,
+    "custom_word": 970,
 }
+
+# Warn well before the pool runs dry: replacements start reusing real values
+# once the column holds a sizeable fraction of everything the generator can
+# produce, and the user needs the warning before that, not after.
+CROWDED_FRACTION = 0.4
 
 
 def _shape_space(value: str) -> int:

@@ -384,9 +384,27 @@ async function runRedactCheck() {
       config: state.config,
     });
   } catch {
-    return; // never block the main task on the advisory check
+    // A failed check must not look like a clean one — silence is the only
+    // all-clear this screen gives.
+    holder.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "warning-strip";
+    p.textContent =
+      "Could not check this file for leftover values just now. Change a " +
+      "column to try again, or choose your file again.";
+    holder.appendChild(p);
+    return;
   }
   holder.innerHTML = "";
+
+  if (!body.leaks.length && !body.weak_columns.length) {
+    const p = document.createElement("p");
+    p.className = "all-clear";
+    p.textContent =
+      "Checked: none of the values you are replacing appear in the columns " +
+      "you are keeping.";
+    holder.appendChild(p);
+  }
 
   for (const leak of body.leaks) {
     const p = document.createElement("p");
@@ -567,10 +585,16 @@ function renderFindings() {
 
 function renderCleanSummary() {
   const optional = cleanState.findings.filter((f) => !f.always);
+  const locked = cleanState.findings.length - optional.length;
   const on = optional.filter((f) => cleanState.enabled.has(f.id)).length;
-  $("clean-summary").textContent = optional.length
-    ? `${on} of ${optional.length} fixes will be applied`
-    : "The download will match the file you gave us.";
+  if (optional.length) {
+    $("clean-summary").textContent = `${on} of ${optional.length} fixes will be applied`;
+  } else if (locked) {
+    $("clean-summary").textContent =
+      "Only the locked fix above will be applied — everything else is unchanged.";
+  } else {
+    $("clean-summary").textContent = "The download will match the file you gave us.";
+  }
 }
 
 async function refreshCleanPreview() {

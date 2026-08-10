@@ -10,8 +10,8 @@ import re
 from datetime import datetime
 
 PLAIN_NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
-# $1,234.56 · (2,500) · 45%
-DECORATED_NUMBER = re.compile(r"^\(?\$?\s?-?[\d,]+(\.\d+)?\)?%?$")
+# $1,234.56 · (2,500) · 45% · -$1,000.50 · $-40.00
+DECORATED_NUMBER = re.compile(r"^\(?-?\$?\s?-?[\d,]+(\.\d+)?\)?%?$")
 
 DATE_FORMATS = (
     "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%m-%d-%Y",
@@ -32,13 +32,16 @@ _AMBIGUOUS_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/\d{2,4}$")
 
 
 def strip_number(value: str) -> str:
-    """'$1,234.56' -> '1234.56', '(2,500)' -> '-2500'."""
-    v = value.strip().replace("$", "").replace(",", "").replace(" ", "")
+    """'$1,234.56' -> '1234.56', '(2,500)' -> '-2500', '-$1,000.50' -> '-1000.50'."""
+    v = value.strip()
+    # The sign can sit either side of the currency symbol: -$40 and $-40
+    first_digit = next((i for i, c in enumerate(v) if c.isdigit()), len(v))
+    negative = "-" in v[:first_digit] or (v.startswith("(") and v.endswith(")"))
+    v = v.replace("$", "").replace(",", "").replace(" ", "")
     if v.endswith("%"):
         v = v[:-1]
-    if v.startswith("(") and v.endswith(")"):
-        v = "-" + v[1:-1]
-    return v
+    v = v.strip("()-")
+    return "-" + v if negative and v else v
 
 
 def parse_date(value: str) -> datetime | None:

@@ -129,6 +129,31 @@ def test_xlsx_whole_number_floats_read_without_trailing_point_zero():
     assert sheets[0].rows == [["1001", "0.5"]]
 
 
+def test_year_columns_are_still_a_heading_row():
+    # Wide-format exports name their columns after years
+    data = b"Name,2023,2024\nAda,88,91\nGrace,75,80\nAlan,95,99\n"
+    sheets = read_file("years.csv", data)
+    assert sheets[0].headers == ["Name", "2023", "2024"]
+    assert sheets[0].rows[0] == ["Ada", "88", "91"]
+
+
+def test_mostly_numeric_first_row_is_data():
+    data = b"101,88,91\n102,75,80\n103,95,99\n"
+    sheets = read_file("x.csv", data)
+    assert sheets[0].headers == ["column_1", "column_2", "column_3"]
+    assert len(sheets[0].rows) == 3
+
+
+def test_one_email_in_the_first_row_is_enough_to_call_it_data():
+    data = (
+        b"Ada Lovelace,Math,Grade 5,ada@school.edu,Active\n"
+        b"Grace Hopper,CS,Grade 6,grace@school.edu,Active\n"
+    )
+    sheets = read_file("roster.csv", data)
+    assert sheets[0].headers[0] == "column_1"
+    assert len(sheets[0].rows) == 2
+
+
 def test_headerless_csv_gets_synthetic_headers_and_keeps_first_row():
     # FEC bulk files have no header row; the first record must stay data
     # (a "header" full of PII would never be redacted)

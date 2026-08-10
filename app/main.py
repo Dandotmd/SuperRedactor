@@ -2,6 +2,7 @@
 sessions live in process memory, nothing is written to disk or sent
 anywhere."""
 
+import collections
 import datetime
 import io
 import json
@@ -36,10 +37,12 @@ app = FastAPI(title="SuperRedactor")
 STATIC_DIR = Path(__file__).parent / "static"
 PREVIEW_ROWS = 50
 
-_sessions: dict[str, dict] = {}
-# Each session holds a whole parsed workbook in memory. Bounded so a long
-# working day of uploads can't quietly consume all of it.
-MAX_SESSIONS = 12
+_sessions: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+# Each session holds a whole parsed workbook in memory, so the number of
+# them is bounded. Least-recently-used is evicted, never the file someone
+# is in the middle of working on — chaining between tools mints new
+# sessions, so a plain count would drop the file still on screen.
+MAX_SESSIONS = 24
 
 
 def _safe_stem(filename: str | None) -> str:
@@ -51,7 +54,8 @@ def _safe_stem(filename: str | None) -> str:
     """
     base = PurePosixPath((filename or "file").replace("\\", "/")).name
     stem = base.rsplit(".", 1)[0] if "." in base else base
-    stem = stem.replace('"', "").replace("\r", "").replace("\n", "").strip()
+    stem = "".join(c for c in stem if c.isprintable() and c != '"')
+    stem = stem.strip().strip(".").strip()
     return stem or "file"
 
 
@@ -195,7 +199,11 @@ def do_redact(req: RedactRequest):
 def _get_session(session_id: str) -> dict:
     session = _sessions.get(session_id)
     if session is None:
-        raise HTTPException(status_code=404, detail="Unknown session — re-upload the file")
+        raise HTTPException(
+            status_code=404,
+            detail="That file is no longer loaded. Please choose it again.",
+        )
+    _sessions.move_to_end(session_id)  # most recently used
     return session
 
 
@@ -283,10 +291,25 @@ def _require_template(req: StandardizeRequest) -> dict:
         column.setdefault("type", "text")
         if column["type"] not in ("text", "date", "number"):
             column["type"] = "text"
-        if not isinstance(column.get("aliases", {}), dict):
+        # Templates are meant to be committed and hand-edited, so anything
+        # in here may have been typed by a person. Keep the usable parts
+        # and drop the rest rather than failing on the whole file.
+        aliases = column.get("aliases")
+        if isinstance(aliases, dict):
+            column["aliases"] = {
+                k: v
+                for k, v in aliases.items()
+                if isinstance(k, str) and isinstance(v, str)
+            }
+        elif aliases is not None:
             column["aliases"] = {}
-        if not isinstance(column.get("values", []), list):
-            column.pop("values", None)
+        values = column.get("values")
+        if isinstance(values, list):
+            column["values"] = [v for v in values if isinstance(v, str)]
+            if not column["values"]:
+                column.pop("values")
+        elif values is not None:
+            column.pop("values")
     return template
 
 

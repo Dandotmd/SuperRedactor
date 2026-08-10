@@ -181,7 +181,7 @@ def test_detects_and_neutralizes_formula_cells():
             [
                 ["Sarah", "=cmd|'/c calc'!A1"],
                 ["Bob", "@SUM(A1:A9)"],
-                ["Maya", "+1234"],
+                ["Maya", "+cmd|calc"],
                 ["Tom", "ok"],
             ],
         )
@@ -193,9 +193,16 @@ def test_detects_and_neutralizes_formula_cells():
     assert [r[1] for r in cleaned[0].rows] == [
         "'=cmd|'/c calc'!A1",
         "'@SUM(A1:A9)",
-        "'+1234",
+        "'+cmd|calc",
         "ok",
     ]
+
+
+def test_plain_signed_numbers_are_not_flagged_as_formulas():
+    sheets = [
+        sheet(["Amount"], [["+1234"], ["-1.5e10"], ["+44 20 7946 0000"], ["-$40.00"]])
+    ]
+    assert by_kind(analyze(sheets), "formula_injection") == []
 
 
 def test_negative_numbers_are_not_treated_as_formulas():

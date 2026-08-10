@@ -94,6 +94,83 @@ def test_one_fake_never_stands_for_two_different_real_values():
         assert len(fakes) == len(set(fakes)), "a fake was reused for two real values"
 
 
+def test_reused_real_names_are_always_warned_about_first():
+    """The worst case: the real names come from the same pool the generator
+    draws from, so avoiding them all is impossible past a certain size. The
+    tool may reuse a value — it may never do so silently."""
+    from faker import Faker
+
+    from app.engine.leakcheck import find_weak_columns
+    from app.engine.readers import Sheet
+
+    faker = Faker()
+    for count in (200, 300, 400, 600):
+        pool: set[str] = set()
+        while len(pool) < count:
+            pool.add(faker.first_name())
+        names = sorted(pool)
+        sheets = [Sheet(name="S", headers=["first"], rows=[[n] for n in names])]
+        config = {"S": {"first": "first_name"}}
+
+        redacted, _ = redact(sheets, config)
+        reused = {r[0] for r in redacted[0].rows} & set(names)
+        if reused:
+            assert find_weak_columns(sheets, config), (
+                f"{len(reused)} of {count} real names reused with no warning"
+            )
+
+
+def test_no_real_first_name_is_reused_at_school_roster_size():
+    """400 distinct first names is an ordinary school. The generator's pool
+    is smaller than that, so this must either avoid every real value or say
+    out loud that it cannot."""
+    from app.engine.leakcheck import find_weak_columns
+    from app.engine.readers import Sheet
+
+    names = [f"RealName{i}" for i in range(400)]
+    sheets = [Sheet(name="S", headers=["first"], rows=[[n] for n in names])]
+    config = {"S": {"first": "first_name"}}
+
+    redacted, _ = redact(sheets, config)
+    produced = {r[0] for r in redacted[0].rows}
+    reused = produced & set(names)
+
+    warned = find_weak_columns(sheets, config)
+    assert not reused or warned, (
+        f"{len(reused)} real names reused as someone else's fake, with no warning"
+    )
+
+
+def test_warning_fires_before_collisions_actually_start():
+    from app.engine.leakcheck import find_weak_columns
+    from app.engine.readers import Sheet
+
+    for count in (350, 400, 500, 600):
+        rows = [[f"RealName{i}"] for i in range(count)]
+        sheets = [Sheet(name="S", headers=["first"], rows=rows)]
+        assert find_weak_columns(sheets, {"S": {"first": "first_name"}}), (
+            f"{count} distinct names should warn — the pool holds ~690"
+        )
+
+
+def test_no_false_alarm_on_a_normal_sized_column():
+    from app.engine.leakcheck import find_weak_columns
+    from app.engine.readers import Sheet
+
+    rows = [[f"RealName{i}"] for i in range(60)]
+    sheets = [Sheet(name="S", headers=["first"], rows=rows)]
+    assert find_weak_columns(sheets, {"S": {"first": "first_name"}}) == []
+
+
+def test_last_name_boundary_warns():
+    from app.engine.leakcheck import find_weak_columns
+    from app.engine.readers import Sheet
+
+    rows = [[f"RealSurname{i}"] for i in range(500)]
+    sheets = [Sheet(name="S", headers=["last"], rows=rows)]
+    assert find_weak_columns(sheets, {"S": {"last": "last_name"}})
+
+
 def test_redaction_warns_when_a_column_is_too_small_to_hide_anything():
     from app.engine.readers import Sheet
 

@@ -50,14 +50,18 @@ def test_utf16_without_bom_is_decoded():
 
 # ---- formulas must never execute in output --------------------------------
 
-FORMULAS = ["=cmd|'/c calc'!A1", "@SUM(1+1)", "+1+1", "-cmd|calc"]
+FORMULAS = ["=cmd|'/c calc'!A1", "@SUM(1+1)", "+SUM(A1)", "-cmd|calc"]
 
 
-def test_csv_output_never_starts_a_cell_with_a_formula_character():
+def test_csv_output_never_emits_an_executable_cell():
+    from app.engine.safety import is_formula_risk
+
     sheet = Sheet(name="S", headers=["note"], rows=[[f] for f in FORMULAS])
     text = write_csv(sheet).decode()
     for line in text.splitlines()[1:]:
-        assert not line.lstrip('"').startswith(("=", "@", "+", "-")), line
+        cell = line.strip('"')
+        assert not is_formula_risk(cell), cell
+        assert cell.startswith("'"), cell
 
 
 def test_xlsx_output_stores_formulas_as_text_not_live_formulas():
@@ -73,6 +77,57 @@ def test_negative_numbers_survive_unharmed():
     sheet = Sheet(name="S", headers=["amount"], rows=[["-5"], ["-12.5"]])
     lines = write_csv(sheet).decode().splitlines()
     assert lines[1:] == ["-5", "-12.5"]
+
+
+ORDINARY_VALUES = [
+    "-1.5e10",              # scientific notation
+    "+1 (555) 010-0100",    # US phone
+    "+44 20 7946 0000",     # international phone
+    "-1,234.56",            # negative with thousands separator
+    "-$40.00",              # negative currency
+    "@example.com",         # email fragment / social handle
+    "@danielrupp",
+    "-1/2",                 # fraction
+    "-",                    # dash placeholder
+    "--",
+    "-Q3 result",           # a leading dash on prose
+]
+
+
+def test_ordinary_values_are_not_treated_as_formulas():
+    from app.engine.safety import is_formula_risk
+
+    for value in ORDINARY_VALUES:
+        assert not is_formula_risk(value), value
+
+
+def test_ordinary_values_are_written_out_unchanged():
+    sheet = Sheet(name="S", headers=["v"], rows=[[v] for v in ORDINARY_VALUES])
+    written = write_csv(sheet).decode()
+    assert "'" not in written, written
+
+
+def test_command_payloads_are_still_caught():
+    from app.engine.safety import is_formula_risk
+
+    for value in [
+        "=cmd|'/c calc'!A1",
+        "@SUM(1+1)",
+        "+SUM(1+1)",
+        "-2+3+cmd|'/C calc'!A0",
+        "=HYPERLINK(\"http://x\")",
+        "@cmd|calc",
+        "\t=cmd|calc",
+    ]:
+        assert is_formula_risk(value), value
+
+
+def test_negative_currency_is_recognized_as_a_number():
+    from app.engine.values import DECORATED_NUMBER, strip_number
+
+    for value, expected in [("-$1,000.50", "-1000.50"), ("$-40.00", "-40.00")]:
+        assert DECORATED_NUMBER.match(value), value
+        assert strip_number(value) == expected
 
 
 # ---- cleaners must not delete real data -----------------------------------
@@ -146,6 +201,24 @@ def test_unambiguous_missing_markers_still_normalized():
 
 
 # ---- excel formulas with no cached value ----------------------------------
+
+def test_partly_formula_column_keeps_every_row():
+    # A column where only some cells are formulas lost those cells entirely
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "S"
+    ws.append(["Student", "Score", "Total"])
+    ws.append(["Ada", 2, "=B2*10"])
+    ws.append(["Bo", 3, 60])
+    ws.append(["Cy", 4, "=B4*10"])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    sheets = read_file("calc.xlsx", buf.getvalue())
+    assert [r[2] for r in sheets[0].rows] == ["=B2*10", "60", "=B4*10"]
+
 
 def test_xlsx_formula_without_cached_value_reads_as_its_formula():
     from openpyxl import Workbook

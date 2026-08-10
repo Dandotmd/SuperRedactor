@@ -98,6 +98,60 @@ def test_exact_match_still_reported_for_short_values():
     assert len(leaks) == 1 and leaks[0].count == 1
 
 
+def test_value_redacted_on_one_sheet_but_kept_on_another_is_reported():
+    sheets = [
+        Sheet(name="Roster", headers=["Student"], rows=[["Maria Lopez"], ["Devon Pryce"]]),
+        Sheet(
+            name="Services",
+            headers=["Student", "Minutes"],
+            rows=[["Maria Lopez", "60"], ["Devon Pryce", "30"]],
+        ),
+    ]
+    leaks = find_leaks(sheets, {"Roster": {"Student": "person_name"}})
+    assert leaks, "the name is still in the clear on the Services sheet"
+    assert leaks[0].sheet == "Services"
+
+
+def test_case_variants_are_reported():
+    sheets = [
+        Sheet(
+            name="S",
+            headers=["Student", "Notes"],
+            rows=[
+                ["Maria Lopez", "PARENT CONFERENCE WITH MARIA LOPEZ"],
+                ["Devon Pryce", "IEP MEETING - DEVON PRYCE ABSENT"],
+                ["Aisha Khan", "AISHA KHAN REFERRED TO COUNSELOR"],
+            ],
+        )
+    ]
+    leaks = find_leaks(sheets, {"S": {"Student": "person_name"}})
+    assert leaks and leaks[0].count == 3, "all three shout-cased names must count"
+
+
+def test_possessive_forms_are_reported():
+    sheets = [
+        Sheet(
+            name="S",
+            headers=["Student", "Notes"],
+            rows=[
+                ["Ida Wells", "Ida Wells's guardian called"],
+                ["Bo Diddley", "nothing"],
+                ["Cy Young", "nothing"],
+            ],
+        )
+    ]
+    assert find_leaks(sheets, {"S": {"Student": "person_name"}})
+
+
+def test_exact_matches_are_found_beyond_the_first_20000_values():
+    rows = [[f"Student {i}", ""] for i in range(20_005)]
+    for i in (20_002, 20_003, 20_004):
+        rows[i][1] = f"Student {i}"
+    sheets = [Sheet(name="S", headers=["Student", "Guardian"], rows=rows)]
+    leaks = find_leaks(sheets, {"S": {"Student": "person_name"}})
+    assert leaks and leaks[0].count == 3
+
+
 def test_large_file_completes_quickly():
     import time
 
