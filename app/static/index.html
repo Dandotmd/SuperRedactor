@@ -27,8 +27,12 @@
   <!-- ============================ REDACT ============================ -->
   <section id="panel-redact" class="panel is-active" role="tabpanel">
     <p class="lede">Replace names, emails, and other personal details with
-      realistic fake data, so you can share the file with an AI tool safely.
-      You get a key file to turn the fakes back into the real values later.</p>
+      realistic fake data before you hand a file to an AI tool. You also get a
+      key file, kept on this computer, that turns the fakes back into the real
+      values later.</p>
+    <p class="lede-note">Replacement works on whole columns. Anything you
+      choose to keep goes out exactly as it is — including personal details
+      written inside sentences. Check the warnings before you download.</p>
 
     <div id="dropzone" class="dropzone" tabindex="0" role="button"
          aria-label="Choose a CSV or Excel file to redact">
@@ -49,16 +53,22 @@
       <div class="table-scroll">
         <table id="preview-table"></table>
       </div>
+      <p id="redact-scroll-hint" class="scroll-hint"></p>
+      <div id="redact-warnings" aria-live="polite"></div>
+      <p class="hint"><strong>Step 2.</strong> The download is a ZIP holding
+        <em>two</em> files: the redacted spreadsheet, and the key that undoes it.
+        Share only the redacted spreadsheet.</p>
       <div class="actionbar">
         <p id="redact-summary" class="summary" aria-live="polite"></p>
         <button id="redact-btn" class="btn-primary" type="button">Redact and download</button>
       </div>
       <div id="redact-next" class="next-step" hidden>
-        <p><strong>Downloaded.</strong> The ZIP holds two files: the redacted
-          spreadsheet, which is safe to share, and <code>mapping.json</code>, the key
-          that turns fake values back into real ones.</p>
-        <p class="danger-note">Never send <code>mapping.json</code> to anyone or upload
-          it anywhere. Keep it on this computer — anyone who has it can undo the redaction.</p>
+        <p><strong>Downloaded.</strong> Open the ZIP and you'll find two files:</p>
+        <p><code>…redacted.csv</code> — the one to share.<br>
+          <code>DO-NOT-SHARE.….mapping.json</code> — the key.</p>
+        <p class="danger-note">Never send the key file to anyone, attach it to an
+          email, or upload it. Anyone who has it can undo the redaction completely.
+          Don't forward the whole ZIP either — take the redacted file out of it first.</p>
       </div>
     </div>
   </section>
@@ -117,8 +127,8 @@
     <!-- make -->
     <div id="std-make" hidden>
       <p class="hint"><strong>Step 1.</strong> Drop in a file that already has the layout
-        you want every file to follow. Only the column names and types are saved —
-        none of the data.</p>
+        you want every file to follow. The template saves your column names and what
+        each one holds — not your rows.</p>
       <div id="std-make-dropzone" class="dropzone" tabindex="0" role="button"
            aria-label="Choose a well-organized example file">
         <p class="dropzone-title">Drop a well-organized file here, or click to choose one</p>
@@ -132,12 +142,14 @@
           <button id="std-make-reset" class="btn-quiet" type="button">Start over</button>
         </div>
         <p class="hint"><strong>Step 2.</strong> Check what each column holds. Columns that
-          repeat a short list of values (like a status) also remember that list, so
+          repeat a short list of values (like a status) can also remember that list, so
           spellings get tidied up automatically later.</p>
+        <div id="std-values-warning"></div>
         <div id="std-columns" class="findings"></div>
         <div class="actionbar">
-          <p class="summary">Save this as a template file you can reuse or share.</p>
+          <p id="std-make-summary" class="summary">Save this as a template file you can reuse.</p>
           <button id="std-save-template" class="btn-primary" type="button">Download template</button>
+          <button id="std-use-now" class="btn-quiet" type="button" hidden>Use this template now →</button>
         </div>
       </div>
     </div>

@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 
 from app.engine.cleaners import _DECORATED_NUMBER, _PLAIN_NUMBER, _parse_date, _strip_number
+from app.engine.detect import suggest_type
 from app.engine.readers import Sheet
 
 TEMPLATE_VERSION = 1
@@ -93,14 +94,23 @@ def _guess_vocabulary(values: list[str]) -> list[str] | None:
 
 
 def make_template(sheet: Sheet, name: str) -> dict:
+    """Describe a sheet's shape so other files can be reshaped to match.
+
+    Columns that repeat a short list of values also remember that list, so
+    spellings can be tidied later. Those values are real data, and templates
+    get shared — so a column whose heading suggests personal information
+    never remembers anything, and the caller is told which columns do.
+    """
     columns = []
+    carries_values = []
     for i, header in enumerate(sheet.headers):
         values = [row[i] for row in sheet.rows]
         column = {"name": header, "type": _guess_type(values)}
-        if column["type"] == "text":
+        if column["type"] == "text" and suggest_type(header) is None:
             vocabulary = _guess_vocabulary(values)
             if vocabulary:
                 column["values"] = vocabulary
+                carries_values.append(header)
         columns.append(column)
     return {
         "tool": "superredactor",
@@ -108,6 +118,7 @@ def make_template(sheet: Sheet, name: str) -> dict:
         "version": TEMPLATE_VERSION,
         "name": name,
         "columns": columns,
+        "columns_with_values": carries_values,
     }
 
 
@@ -163,6 +174,36 @@ def match_columns(template_cols: list[str], headers: list[str]) -> dict[str, str
             take(col, max(scored)[1])
 
     return mapping
+
+
+def suggest_sources(
+    template_cols: list[str], headers: list[str], mapping: dict[str, str | None]
+) -> dict[str, str]:
+    """For template columns nothing matched, the closest leftover column.
+
+    Offered as "did you mean…?" rather than applied: a wrong auto-match
+    silently moves data into the wrong column, while a wrong suggestion
+    costs one glance.
+    """
+    used = {v for v in mapping.values() if v}
+    spare = [h for h in headers if h not in used]
+    suggestions: dict[str, str] = {}
+    for col in template_cols:
+        if mapping.get(col) is not None or not spare:
+            continue
+        col_tokens = _tokens(col)
+        scored = []
+        for header in spare:
+            shared = len(col_tokens & _tokens(header)) / max(
+                1, len(col_tokens | _tokens(header))
+            )
+            close = difflib.SequenceMatcher(None, _norm(col), _norm(header)).ratio()
+            scored.append((max(shared, close), header))
+        score, header = max(scored)
+        if score >= 0.3:
+            suggestions[col] = header
+            spare.remove(header)
+    return suggestions
 
 
 # 05/06/2024 is the 5th of June in most of the world and the 6th of May in

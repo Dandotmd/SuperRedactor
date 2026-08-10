@@ -23,7 +23,12 @@ from app.engine.fakers import REDACTION_TYPES
 from app.engine.leakcheck import find_leaks, find_weak_columns
 from app.engine.readers import read_file
 from app.engine.redactor import redact
-from app.engine.standardize import apply_template, make_template, match_columns
+from app.engine.standardize import (
+    apply_template,
+    make_template,
+    match_columns,
+    suggest_sources,
+)
 from app.engine.writers import write_csv, write_xlsx
 
 app = FastAPI(title="SuperRedactor")
@@ -98,13 +103,17 @@ class StandardizeRequest(BaseModel):
     keep_extras: list[str] = []
 
 
-def _new_session(filename: str, sheets: list) -> dict:
+def _new_session(filename: str, sheets: list, original: bytes | None = None) -> dict:
     """Register sheets as a session and describe them the way the UI expects.
     Used both by upload and by the 'continue with this result' handoffs."""
     session_id = uuid.uuid4().hex
     while len(_sessions) >= MAX_SESSIONS:
         _sessions.pop(next(iter(_sessions)))
-    _sessions[session_id] = {"filename": filename, "sheets": sheets}
+    _sessions[session_id] = {
+        "filename": filename,
+        "sheets": sheets,
+        "original": original,
+    }
     return {
         "session_id": session_id,
         "filename": filename,
@@ -131,7 +140,7 @@ async def upload(file: UploadFile):
         sheets = read_file(file.filename or "upload.csv", data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return _new_session(file.filename, sheets)
+    return _new_session(file.filename, sheets, original=data)
 
 
 @app.post("/api/redact/check")
@@ -169,11 +178,18 @@ def do_redact(req: RedactRequest):
         "warnings": warnings,
         "mapping": mapping,
     }
+    # The ZIP holds both the shareable file and the key that undoes it, so
+    # both names have to say which is which. "staff.redacted.zip" invited
+    # people to forward the whole thing.
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(out_name, out_bytes)
-        zf.writestr(f"{stem}.mapping.json", json.dumps(mapping_doc, indent=2))
-    return _download(buf.getvalue(), f"{stem}.redacted.zip", "application/zip")
+        zf.writestr(f"DO-NOT-SHARE.{stem}.mapping.json", json.dumps(mapping_doc, indent=2))
+    return _download(
+        buf.getvalue(),
+        f"{stem}.redacted-plus-key-DO-NOT-SHARE.zip",
+        "application/zip",
+    )
 
 
 def _get_session(session_id: str) -> dict:
@@ -206,9 +222,19 @@ def clean_analyze(req: CleanRequest):
 def clean_apply(req: CleanRequest):
     session = _get_session(req.session_id)
     enabled = None if req.enabled is None else set(req.enabled)
-    cleaned, _ = clean(session["sheets"], enabled)
 
     filename: str = session["filename"] or "file.csv"
+    if enabled is not None and not enabled and session.get("original") is not None:
+        # "No fixes selected" has to mean the file comes back untouched.
+        # Rewriting it would still introduce parser artifacts like padded
+        # rows and invented headings for unnamed columns.
+        return _download(
+            session["original"],
+            filename,
+            "application/octet-stream",
+        )
+    cleaned, _ = clean(session["sheets"], enabled)
+
     stem = _safe_stem(filename)
     if filename.lower().endswith((".xlsx", ".xlsm")):
         out_name, out_bytes = f"{stem}.cleaned.xlsx", write_xlsx(cleaned)
@@ -303,6 +329,7 @@ def standardize_match(req: StandardizeRequest):
     return {
         "mapping": mapping,
         "extras": [h for h in sheet.headers if h not in used],
+        "suggestions": suggest_sources(template_cols, sheet.headers, mapping),
     }
 
 
@@ -363,6 +390,13 @@ def standardize_commit(req: StandardizeRequest):
 
 @app.post("/api/deredact")
 def do_deredact(req: DeredactRequest):
+    if req.mapping.get("kind") == "template":
+        raise HTTPException(
+            status_code=400,
+            detail="That's a template file, not a key file. The key is the "
+            "DO-NOT-SHARE…mapping.json from the ZIP you downloaded when you "
+            "redacted.",
+        )
     mapping = req.mapping.get("mapping", req.mapping)
     if not isinstance(mapping, dict):
         raise HTTPException(
@@ -377,6 +411,12 @@ def do_deredact(req: DeredactRequest):
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/favicon.ico")
+def favicon():
+    # The page supplies its own inline icon; browsers ask for this anyway.
+    return Response(status_code=204)
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

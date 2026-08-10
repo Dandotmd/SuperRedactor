@@ -49,11 +49,11 @@ def test_redact_returns_zip_with_file_and_mapping():
     assert resp.status_code == 200
     zf = zipfile.ZipFile(io.BytesIO(resp.content))
     names = set(zf.namelist())
-    assert names == {"grades.redacted.csv", "grades.mapping.json"}
+    assert names == {"grades.redacted.csv", "DO-NOT-SHARE.grades.mapping.json"}
     redacted = zf.read("grades.redacted.csv").decode()
     assert "Sarah Chen" not in redacted
     assert ",88" in redacted
-    mapping = json.loads(zf.read("grades.mapping.json"))
+    mapping = json.loads(zf.read("DO-NOT-SHARE.grades.mapping.json"))
     assert "Sarah Chen" in mapping["mapping"]["Sheet1"]["name"]
 
 
@@ -100,7 +100,7 @@ def test_deredact_translates_text():
         json={"session_id": session_id, "config": {"Sheet1": {"name": "person_name"}}},
     )
     zf = zipfile.ZipFile(io.BytesIO(zip_resp.content))
-    mapping_doc = json.loads(zf.read("grades.mapping.json"))
+    mapping_doc = json.loads(zf.read("DO-NOT-SHARE.grades.mapping.json"))
     fake = mapping_doc["mapping"]["Sheet1"]["name"]["Sarah Chen"]
 
     resp = client.post(

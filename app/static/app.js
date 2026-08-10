@@ -16,6 +16,16 @@ function busy(on, text) {
 function showError(message) {
   const el = $("error");
   el.textContent = message;
+  el.className = "error";
+  el.hidden = false;
+  el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+/** For "here's what to do next" — red is for things that went wrong. */
+function showNotice(message) {
+  const el = $("error");
+  el.textContent = message;
+  el.className = "notice";
   el.hidden = false;
   el.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
@@ -48,7 +58,13 @@ async function api(path, body, { raw = false, form = null } = {}) {
     let detail = `Something went wrong (error ${resp.status}).`;
     try {
       const parsed = await resp.json();
-      if (parsed && parsed.detail) detail = parsed.detail;
+      // FastAPI validation errors put an array here; showing it raw
+      // rendered as "[object Object]".
+      if (parsed && typeof parsed.detail === "string") detail = parsed.detail;
+      else if (parsed && parsed.detail)
+        detail =
+          "That file or setting wasn't in the expected format. Try choosing " +
+          "the file again.";
     } catch {
       /* keep the generic message */
     }
@@ -142,6 +158,18 @@ function renderSheetTabs(holderId, sheets, activeIndex, onPick) {
   });
 }
 
+/** Says how many columns are off to the right, so "check every column"
+ *  is actually possible to follow. */
+function updateScrollHint(tableId, hintId, headers) {
+  const hint = $(hintId);
+  if (!hint) return;
+  const scroller = $(tableId).closest(".table-scroll");
+  const hidden = scroller && scroller.scrollWidth > scroller.clientWidth + 4;
+  hint.textContent = hidden
+    ? `${headers.length} columns — scroll sideways in the table to see them all.`
+    : "";
+}
+
 function renderTable(tableId, headers, rows) {
   const table = $(tableId);
   table.innerHTML = "";
@@ -205,9 +233,11 @@ function adoptForRedact(body) {
   for (const sheet of body.sheets) {
     state.config[sheet.name] = { ...sheet.suggestions };
   }
+  state.downloaded = false;
   $("dropzone").hidden = true;
   $("workspace").hidden = false;
   $("redact-next").hidden = true;
+  $("redact-warnings").innerHTML = "";
   $("file-label").textContent = body.filename;
   renderRedactTabs();
   renderRedactTable();
@@ -323,10 +353,62 @@ function renderRedactTable() {
   const parts = [];
   if (redacted) parts.push(`${redacted} column${redacted === 1 ? "" : "s"} will be replaced with fake data`);
   if (dropped) parts.push(`${dropped} will be removed`);
+  const sheetNote = state.sheets.length > 1 ? " (across all sheets)" : "";
   $("redact-summary").textContent = parts.length
-    ? parts.join(", ")
+    ? parts.join(", ") + sheetNote
     : "Nothing marked yet — choose at least one column to replace or remove.";
   $("redact-btn").disabled = !parts.length;
+
+  updateScrollHint("preview-table", "redact-scroll-hint", sheet.headers);
+  scheduleRedactCheck();
+}
+
+/** Checking for leftovers means scanning the file, so it waits for the
+ *  user to stop changing dropdowns. */
+let redactCheckTimer = null;
+function scheduleRedactCheck() {
+  clearTimeout(redactCheckTimer);
+  redactCheckTimer = setTimeout(runRedactCheck, 350);
+}
+
+async function runRedactCheck() {
+  const holder = $("redact-warnings");
+  if (!state.sessionId || $("redact-btn").disabled) {
+    holder.innerHTML = "";
+    return;
+  }
+  let body;
+  try {
+    body = await api("/api/redact/check", {
+      session_id: state.sessionId,
+      config: state.config,
+    });
+  } catch {
+    return; // never block the main task on the advisory check
+  }
+  holder.innerHTML = "";
+
+  for (const leak of body.leaks) {
+    const p = document.createElement("p");
+    p.className = "danger-note";
+    const examples = leak.samples.map((s) => `"${s}"`).join(", ");
+    p.textContent =
+      `Still visible: ${leak.count} cell${leak.count === 1 ? "" : "s"} of ` +
+      `"${leak.kept_column}" contain values from "${leak.redacted_column}", ` +
+      `which you are replacing — for example ${examples}. ` +
+      `Replace or remove "${leak.kept_column}" too, or those values go out with the file.`;
+    holder.appendChild(p);
+  }
+
+  for (const column of body.weak_columns) {
+    const p = document.createElement("p");
+    p.className = "warning-strip";
+    p.textContent =
+      `"${column}" has too few different values to hide anyone — some ` +
+      `replacements will be values that really appear in this column. ` +
+      `Removing the column is safer.`;
+    holder.appendChild(p);
+  }
 }
 
 $("redact-btn").addEventListener(
@@ -340,8 +422,16 @@ $("redact-btn").addEventListener(
         { raw: true }
       );
       const stem = state.filename.replace(/\.[^.]+$/, "");
-      downloadBlob(blob, `${stem}.redacted.zip`);
+      downloadBlob(blob, `${stem}.redacted-plus-key-DO-NOT-SHARE.zip`);
       $("redact-next").hidden = false;
+      if (state.downloaded) {
+        showNotice(
+          "That was a second download, and it has a brand-new key. The key " +
+            "from your earlier download will not work on this file — use the " +
+            "newest pair together."
+        );
+      }
+      state.downloaded = true;
     },
     () => {
       $("workspace").hidden = true;
@@ -527,14 +617,19 @@ $("clean-to-redact").addEventListener(
 $("clean-to-standardize").addEventListener(
   "click",
   guard("Preparing…", async () => {
-    stdState.pendingSession = await commitClean();
+    const staged = await commitClean();
     showPanel("panel-standardize");
     setStdMode("apply");
-    if (stdState.template) await startStandardizeApply(stdState.pendingSession);
-    else
-      showError(
-        "Choose your template file above and this data will be standardized with it."
+    if (stdState.template) {
+      stdState.pendingSession = null;
+      await startStandardizeApply(staged);
+    } else {
+      stdState.pendingSession = staged;
+      showNotice(
+        "Your cleaned data is ready. Choose your template file above and it " +
+          "will be standardized with it."
       );
+    }
   }, resetClean)
 );
 
@@ -621,6 +716,30 @@ $("std-make-reset").addEventListener("click", () => {
 });
 
 function renderTemplateColumns() {
+  const remembered = stdState.template.columns.filter((c) => c.values);
+  const warning = $("std-values-warning");
+  warning.innerHTML = "";
+  if (remembered.length) {
+    const p = document.createElement("p");
+    p.className = "warning-strip";
+    p.textContent =
+      `This template will include example values copied from your file — ` +
+      `the lists shown below for ${remembered.map((c) => `"${c.name}"`).join(", ")}. ` +
+      `If any of them are sensitive, use "Forget list" before you save or share it.`;
+    const forgetAll = document.createElement("button");
+    forgetAll.type = "button";
+    forgetAll.className = "btn-quiet";
+    forgetAll.textContent = "Forget all lists";
+    forgetAll.addEventListener("click", () => {
+      for (const col of stdState.template.columns) delete col.values;
+      renderTemplateColumns();
+    });
+    warning.append(p, forgetAll);
+  }
+  $("std-make-summary").textContent = remembered.length
+    ? "Check the example values above, then save."
+    : "Save this as a template file you can reuse or share.";
+
   const holder = $("std-columns");
   holder.innerHTML = "";
   for (const col of stdState.template.columns) {
@@ -674,6 +793,18 @@ $("std-save-template").addEventListener("click", () => {
     type: "application/json",
   });
   downloadBlob(blob, `${name}.template.json`);
+  $("std-use-now").hidden = false;
+});
+
+// Saved templates are usually wanted immediately; making the user find the
+// file they just downloaded was a needless detour.
+$("std-use-now").addEventListener("click", () => {
+  setStdMode("apply");
+  $("std-apply-dropzone").hidden = false;
+  showNotice(
+    `Using the "${stdState.template.name}" template you just made. Drop in the ` +
+      `file you want to standardize.`
+  );
 });
 
 // --- apply a template ---
@@ -684,16 +815,28 @@ $("std-template-input").addEventListener(
     const file = $("std-template-input").files[0];
     if (!file) return;
     let parsed;
+    const reject = (message) => {
+      // Leaving the rejected name in the picker made it look like that file
+      // was in use when the previous template still was.
+      $("std-template-input").value = "";
+      throw new Error(message);
+    };
     try {
       parsed = JSON.parse(await file.text());
     } catch {
-      throw new Error(
+      reject(
         "That file isn't a template. Templates are made on the 'Make a template' " +
           "screen and their names end in .template.json"
       );
     }
+    if (parsed && parsed.mapping) {
+      reject(
+        "That's a key file from a redaction, not a template. Templates are made " +
+          "on the 'Make a template' screen."
+      );
+    }
     if (!parsed || parsed.kind !== "template" || !Array.isArray(parsed.columns)) {
-      throw new Error(
+      reject(
         "That JSON file isn't a SuperRedactor template. Use one you saved on the " +
           "'Make a template' screen."
       );
@@ -729,6 +872,7 @@ async function matchActiveSheet() {
   });
   stdState.mapping = match.mapping;
   stdState.extras = match.extras;
+  stdState.suggestions = match.suggestions || {};
   stdState.keepExtras = new Set();
   renderSheetTabs(
     "std-apply-sheet-tabs",
@@ -801,6 +945,24 @@ function renderMapping() {
     );
 
     row.append(target, type, select);
+
+    const suggestion = !source && stdState.suggestions[col.name];
+    if (suggestion) {
+      const hint = document.createElement("button");
+      hint.type = "button";
+      hint.className = "btn-quiet suggestion";
+      hint.textContent = `Did you mean "${suggestion}"?`;
+      hint.addEventListener(
+        "click",
+        guard("Updating preview…", async () => {
+          stdState.mapping[col.name] = suggestion;
+          recomputeExtras();
+          renderMapping();
+          await refreshStdPreview();
+        }, resetStdApply)
+      );
+      row.appendChild(hint);
+    }
     holder.appendChild(row);
   }
 
@@ -865,10 +1027,17 @@ async function refreshStdPreview() {
   renderUnmatchedValues(body.unmatched, body.vocabularies);
   renderTable("std-preview-table", body.headers, body.preview_rows);
 
+  const total = stdState.template.columns.length;
   const mapped = Object.values(stdState.mapping).filter(Boolean).length;
+  const empty = total - mapped;
   $("std-summary").textContent =
-    `${mapped} of ${stdState.template.columns.length} template columns matched, ` +
-    `${body.row_count} rows`;
+    `${mapped} of ${total} template columns matched, ${body.row_count} rows`;
+  // Spell out the consequence on the button itself: downloading a file
+  // whose columns are silently blank is the costly mistake here.
+  $("std-download").textContent = empty
+    ? `Download anyway — ${empty} column${empty === 1 ? "" : "s"} will be empty`
+    : "Download standardized file";
+  $("std-download").classList.toggle("is-risky", empty > 0);
 }
 
 /** Values that don't appear in a column's remembered list. The user assigns
@@ -976,14 +1145,19 @@ $("deredact-btn").addEventListener(
       );
     }
     const body = await api("/api/deredact", { mapping, text });
-    $("deredact-out").value = body.text;
-    $("copy-btn").hidden = false;
     if (body.replacements === 0) {
-      showError(
-        "Nothing in that text matched this key file — check you're using the key " +
-          "from the same redaction run."
+      // Leaving the unchanged text in the box invites copying fake values
+      // in the belief they are real.
+      $("deredact-out").value = "";
+      $("copy-btn").hidden = true;
+      throw new Error(
+        "Nothing in that text matched this key file, so there is nothing to " +
+          "restore. Check you are using the key from the same redaction run as " +
+          "the file you gave the AI."
       );
     }
+    $("deredact-out").value = body.text;
+    $("copy-btn").hidden = false;
   })
 );
 

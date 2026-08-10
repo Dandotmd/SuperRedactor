@@ -7,13 +7,19 @@ the suggested columns and downloads would ship the very data they meant to
 hide, so this check runs before the download and says so plainly.
 """
 
+import re
 from dataclasses import dataclass, field
 
-# Substring scanning is the expensive half, so it is bounded. Exact-cell
-# matching is a cheap set lookup and always runs over every row.
-MAX_TRACKED_VALUES = 2000
-MAX_SUBSTRING_ROWS = 20_000
+# Exact-cell matching is a set lookup and runs over every row, so the
+# "same value in two columns" case is always caught in full.
+#
+# Finding a value quoted inside a sentence needs a substring search, which
+# costs far more, so it runs against a bounded sample. It is a bonus signal
+# on top of the exact check, not the guarantee.
+MAX_TRACKED_VALUES = 20_000
+MAX_SUBSTRING_ROWS = 50_000
 MIN_SUBSTRING_LENGTH = 4
+MAX_VALUE_WORDS = 5
 MAX_SAMPLES = 3
 
 
@@ -65,11 +71,9 @@ def find_leaks(sheets, config: dict[str, dict[str, str]]) -> list[Leak]:
             values = _distinct_values(sheet.rows, idx[column])
             if not values:
                 continue
-            long_values = [v for v in values if len(v) >= MIN_SUBSTRING_LENGTH]
+            quotable = {v for v in values if len(v) >= MIN_SUBSTRING_LENGTH}
             for kept_column in kept:
-                leak = _scan_column(
-                    sheet, idx[kept_column], values, long_values
-                )
+                leak = _scan_column(sheet, idx[kept_column], values, quotable)
                 if leak is None:
                     continue
                 count, samples = leak
@@ -96,7 +100,29 @@ def _distinct_values(rows, index: int) -> set[str]:
     return values
 
 
-def _scan_column(sheet, index: int, values: set[str], long_values: list[str]):
+_EDGE_PUNCTUATION = " \t.,;:!?()[]{}\"'"
+
+
+def _quoted_value(cell: str, quotable: set[str]) -> str | None:
+    """Find a tracked value quoted inside a sentence.
+
+    Looks up word-aligned windows of the cell in the value set rather than
+    searching for each value in the cell: one hash lookup per window keeps
+    this linear in the text, so no cap on the number of values is needed
+    and nothing is missed on a big file.
+    """
+    words = cell.split()
+    if len(words) < 2:
+        return None
+    for start in range(len(words)):
+        for length in range(1, min(MAX_VALUE_WORDS, len(words) - start) + 1):
+            window = " ".join(words[start : start + length]).strip(_EDGE_PUNCTUATION)
+            if len(window) >= MIN_SUBSTRING_LENGTH and window in quotable:
+                return window
+    return None
+
+
+def _scan_column(sheet, index: int, values: set[str], quotable: set[str]):
     count = 0
     samples: list[str] = []
     for row_number, row in enumerate(sheet.rows):
@@ -106,11 +132,8 @@ def _scan_column(sheet, index: int, values: set[str], long_values: list[str]):
         hit = None
         if cell in values:
             hit = cell
-        elif row_number < MAX_SUBSTRING_ROWS:
-            for value in long_values:
-                if value in cell:
-                    hit = value
-                    break
+        elif quotable and row_number < MAX_SUBSTRING_ROWS:
+            hit = _quoted_value(cell, quotable)
         if hit is not None:
             count += 1
             if hit not in samples and len(samples) < MAX_SAMPLES:

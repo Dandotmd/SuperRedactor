@@ -136,10 +136,25 @@ supported — open it in Excel and save as `.xlsx` first.
    names — **check every column yourself**; the suggestions are heuristics.
 2. Set each column to keep, replace with a type of fake data, or remove.
    Marked columns preview as black bars.
-3. Download the ZIP: your redacted file plus `mapping.json`.
+3. Read the warnings. Before you download, the app tells you when:
+   - a value you are replacing **also appears in a column you are keeping**
+     (a name quoted in a notes column, an ID repeated elsewhere), naming the
+     column and showing examples — this is the most common way people leak
+     data with a column-level tool;
+   - a column has **too few possible values to hide anyone** (26 single-letter
+     grade codes have only 26 possible replacements).
+4. Download the ZIP. It contains two files:
+   `yourfile.redacted.csv` — the one to share — and
+   `DO-NOT-SHARE.yourfile.mapping.json` — the key that undoes the redaction.
+   Take the redacted file out of the ZIP; never forward the ZIP itself.
 
 Within one run the same real value always becomes the same fake value —
-including across sheets — so joins between sheets keep working.
+including across sheets — so joins between sheets keep working. Fake values
+are checked against every real value in the file, so a fake name is never
+another person's real name, and one fake never stands for two real values.
+
+Each download generates a **new** key. If you download twice, only the newest
+pair works together.
 
 ### Clean up a file
 
@@ -159,9 +174,15 @@ US month/day (the fix card says so, so you can untick it).
 
 *Make a template*: drop in a file that already has the layout you want. Its
 column names, order, and types (text / dates / numbers) are saved as a small
-portable `template.json` — no cell data. Columns that repeat a short list of
-values (a status, a category) also remember that list. Commit the template to
-a repo or share it as your team's standard.
+portable `template.json`. Commit it to a repo or share it as your team's
+standard.
+
+> Columns that repeat a short list of values (a status, a category) also
+> remember that list, so spellings can be tidied later. **Those remembered
+> values are copied from your file.** Columns whose heading looks personal
+> (name, email, address…) never remember anything, and the screen shows
+> exactly which columns carry example values with a one-click "Forget list"
+> before you save. Check them before sharing a template.
 
 *Apply a template*: load a `template.json`, drop in a file from any system, and
 review the proposed mapping. Columns are auto-matched by normalized names, a
@@ -186,7 +207,10 @@ usually a sign the key is from a different run.
 ## Limits — read before trusting it
 
 - **Whole columns only.** Personal details written inside free text ("Spoke
-  with Sarah's mother…") are **not** detected. Remove those columns if unsure.
+  with Sarah's mother…") are **not** detected or replaced. The app warns you
+  when a value you redacted also appears in a column you kept, but it cannot
+  find a name it has never seen in a redacted column. Remove free-text
+  columns if unsure.
 - Redacted values are random fakes, not anonymization with formal guarantees.
   Rare combinations of the columns you *keep* (age + zip + diagnosis, say) can
   still identify someone. You remain responsible for what you share.
@@ -195,6 +219,24 @@ usually a sign the key is from a different run.
 - Each run generates a fresh key file; there is no cross-file or cross-run
   consistency.
 - Standardize works one sheet at a time (pick the sheet with the tabs).
+
+## How it is tested
+
+157+ tests run the engine and the HTTP API, written before the code they
+cover. Beyond the happy paths they pin down the failures that matter:
+
+- **Leak regressions** (`tests/test_leak_regressions.py`) — every confirmed
+  way a real value once reached "redacted" output, asserted as a property
+  ("no real value appears in the output") so a refactor can't reintroduce it.
+- **Hostile input** (`tests/test_hostile_input.py`, `test_api_hostile.py`) —
+  Mac line endings, cells bigger than the CSV field limit, UTF-16, formula
+  injection, filenames with smart punctuation or `../`, damaged workbooks.
+- **Data-loss guards** — a sparse trailing row is a record, not a footnote;
+  `NA` is Namibia, not a missing value.
+
+`tools/stress_test.py <dir>` runs any folder of real spreadsheets through the
+whole pipeline and reports crashes, row-count changes, and slow files. The
+docstring lists the public federal datasets used below.
 
 ## Tested against real federal data
 

@@ -95,7 +95,8 @@ th { background: var(--folder); position: sticky; top: 0; }
 }
 .col-head select {
   font: inherit; font-size: 0.75rem; padding: 0.15rem 0.2rem;
-  border: 1px solid var(--line); border-radius: 3px; background: #fff; max-width: 11rem;
+  border: 1px solid var(--line); border-radius: 3px; background: #fff;
+  min-width: 12rem; max-width: 16rem;
 }
 .col-head select.is-redacting { border-color: var(--stamp); color: var(--stamp); font-weight: 600; }
 
@@ -117,6 +118,8 @@ td.is-dropped, th.is-dropped .col-name { opacity: 0.35; text-decoration: line-th
 }
 .btn-primary:hover { background: #000; }
 .btn-primary:disabled { opacity: 0.4; cursor: default; }
+.btn-primary.is-risky { background: var(--stamp); }
+.btn-primary.is-risky:hover { background: #8f1e17; }
 .btn-quiet {
   font: inherit; font-size: 0.8rem; color: var(--ink-soft); background: transparent;
   border: 1px solid var(--line); border-radius: 4px; padding: 0.25rem 0.6rem; cursor: pointer;
@@ -194,10 +197,11 @@ td.is-dropped, th.is-dropped .col-name { opacity: 0.35; text-decoration: line-th
 .vocab-note { font-size: 0.78rem; color: var(--ink-soft); flex: 1; }
 .mode-toggle { display: flex; gap: 0.25rem; margin: 1.25rem 0 0; }
 .map-row {
-  display: flex; align-items: center; gap: 0.75rem;
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
   border: 1px solid var(--line); border-radius: 4px; background: #fff;
   padding: 0.5rem 0.75rem;
 }
+.suggestion { color: var(--stamp); border-color: var(--stamp); }
 .map-row.is-missing { border-left: 4px solid var(--stamp); }
 .map-row.is-extra { border-left: 4px solid var(--line); color: var(--ink-soft); }
 .map-target { font-family: var(--font-data); font-size: 0.85rem; font-weight: 700; min-width: 10rem; }
@@ -236,6 +240,35 @@ td.is-dropped, th.is-dropped .col-name { opacity: 0.35; text-decoration: line-th
 .error {
   border-left: 4px solid var(--stamp); background: #fbeae9;
   padding: 0.6rem 0.9rem; font-size: 0.9rem; border-radius: 0 4px 4px 0;
+  margin-top: 1.25rem;
+}
+/* Guidance, not a failure — red would read as "something broke". */
+.notice {
+  border-left: 4px solid #2c5aa0; background: #eef3fb;
+  padding: 0.6rem 0.9rem; font-size: 0.9rem; border-radius: 0 4px 4px 0;
+  margin-top: 1.25rem;
+}
+.lede-note {
+  font-size: 0.88rem; color: var(--ink-soft); max-width: 62ch; margin: 0 0 0.5rem;
+}
+
+/* The preview scrolls sideways when there are many columns; without a cue
+   people never learn the hidden columns exist. */
+.table-scroll { position: relative; }
+.table-scroll::after {
+  content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 2rem;
+  background: linear-gradient(to right, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.95));
+  pointer-events: none;
+}
+.scroll-hint {
+  font-size: 0.78rem; color: var(--ink-soft); margin: 0.3rem 0 0;
+}
+
+@media (max-width: 560px) {
+  .map-target { min-width: 0; }
+  .map-row select { max-width: none; width: 100%; }
+  .masthead-inner { gap: 0.5rem; }
+  .tabs { margin-left: 0; }
 }
 
 footer { border-top: 1px solid var(--line); margin-top: 2rem; }

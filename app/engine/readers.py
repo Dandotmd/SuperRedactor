@@ -36,6 +36,11 @@ def read_file(filename: str, data: bytes) -> list[Sheet]:
         sheets = [_read_csv(data)]
     elif lower.endswith(".xlsx") or lower.endswith(".xlsm"):
         sheets = _read_xlsx(data)
+    elif lower.endswith(".zip"):
+        raise ValueError(
+            "This is a ZIP folder, not a spreadsheet. Unzip it first (double-click "
+            "it), then choose the .csv or .xlsx file inside."
+        )
     else:
         raise ValueError(
             "This tool reads spreadsheet files: CSV (.csv) or Excel (.xlsx). "

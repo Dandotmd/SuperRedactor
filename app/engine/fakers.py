@@ -177,7 +177,7 @@ REDACTION_TYPES: dict[str, str] = {
     "address": "Street address",
     "city": "City",
     "date": "Date",
-    "number": "Number (same magnitude)",
-    "format_preserving": "ID / code (keep format)",
-    "custom_word": "Generic word",
+    "number": "Number (same size, e.g. 4 digits)",
+    "format_preserving": "ID or code (keeps the same shape)",
+    "custom_word": "A made-up word",
 }
