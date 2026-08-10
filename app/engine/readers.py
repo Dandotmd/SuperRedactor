@@ -3,9 +3,14 @@
 import csv
 import io
 import re
+import sys
 from dataclasses import dataclass, field
 
 from openpyxl import load_workbook
+
+# A single cell can legitimately hold a pasted document; the stdlib default
+# of 128 KB rejects those outright.
+csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
 
 @dataclass
@@ -71,14 +76,41 @@ def _normalize(headers: list[str], rows: list[list[str]]) -> Sheet:
 
 
 def _decode(data: bytes) -> str:
-    # Federal exports are frequently cp1252/Latin-1 rather than UTF-8.
-    # latin-1 is the terminal fallback: it accepts any byte sequence.
-    for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+    """Decode spreadsheet bytes, then normalize line endings.
+
+    Excel writes UTF-16 for "Unicode Text", older exports are cp1252, and
+    classic-Mac tools still emit CR-only line endings. latin-1 is the
+    terminal fallback: it accepts any byte sequence, so decoding never
+    fails outright.
+    """
+    text = None
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
         try:
-            return data.decode(encoding)
+            text = data.decode("utf-16")
         except UnicodeDecodeError:
-            continue
-    raise AssertionError("unreachable")
+            text = None
+    if text is None:
+        # UTF-16 without a BOM shows up as every other byte being NUL.
+        head = data[:4096]
+        if head.count(0) > len(head) // 4:
+            for encoding in ("utf-16-le", "utf-16-be"):
+                try:
+                    candidate = data.decode(encoding)
+                except UnicodeDecodeError:
+                    continue
+                if "\x00" not in candidate:
+                    text = candidate
+                    break
+    if text is None:
+        for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                text = data.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+    if text is None:  # pragma: no cover - latin-1 accepts anything
+        raise AssertionError("unreachable")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _sniff_delimiter(text: str) -> str:
@@ -90,15 +122,29 @@ def _sniff_delimiter(text: str) -> str:
         return ","
 
 
-_DATA_CELL = re.compile(r"^-?[\d,.]+$|^\d{4}-\d{2}-\d{2}|^\d{1,2}/\d{1,2}/\d{2,4}$")
+# Shapes a column heading is essentially never written in. Getting this
+# wrong in the "it's a header" direction is dangerous: the header row is not
+# part of the data, so nothing in it is ever redacted. A roster whose first
+# person is mistaken for the headings would ship their name and SSN inside a
+# file labelled "redacted".
+_VALUE_SHAPES = (
+    re.compile(r"^-?[\d,.]+$"),                     # 1,234.50
+    re.compile(r"^\d{4}-\d{2}-\d{2}"),              # 2024-03-12
+    re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}$"),       # 3/12/2024
+    re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$"), # ada@school.edu
+    re.compile(r"^[$€£]\s?[\d,]+"),                 # $1,234
+    re.compile(r"^\+?[\d][\d\s().-]{6,}$"),         # 111-22-3333, phone
+    re.compile(r"^\d{5,}$"),                        # long id run
+)
+
+
+def _looks_like_a_value(cell: str) -> bool:
+    text = cell.strip()
+    return bool(text) and any(shape.match(text) for shape in _VALUE_SHAPES)
 
 
 def _has_header(first_row: list[str]) -> bool:
-    # Headers are essentially never numbers or dates; data rows usually
-    # contain at least one. Bias toward "has a header" — the wrong guess
-    # there only shows odd column names, while treating a real header as
-    # data is harmless (it just gets redacted along with everything else).
-    return not any(_DATA_CELL.match(cell) for cell in first_row if cell)
+    return not any(_looks_like_a_value(cell) for cell in first_row)
 
 
 def _read_csv(data: bytes) -> Sheet:
@@ -139,4 +185,42 @@ def _read_xlsx(data: bytes) -> list[Sheet]:
         headers = rows[0] if rows else []
         headers, body = _normalize(headers, rows[1:])
         sheets.append(Sheet(name=ws.title, headers=headers, rows=body))
+
+    if any(_blank_columns(s) for s in sheets):
+        _fill_from_formulas(data, sheets)
     return sheets
+
+
+def _blank_columns(sheet: Sheet) -> list[int]:
+    if not sheet.rows:
+        return []
+    return [
+        i
+        for i in range(len(sheet.headers))
+        if all(not row[i].strip() for row in sheet.rows)
+    ]
+
+
+def _fill_from_formulas(data: bytes, sheets: list[Sheet]) -> None:
+    """A workbook saved by a script or a web exporter often has no cached
+    results for its formulas, so those columns read as empty and later look
+    deletable. Fall back to the formula text so the column survives. Only
+    reached when a column is entirely empty, so the extra read is rare.
+    """
+    try:
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=False)
+    except Exception:
+        return
+    by_name = {ws.title: ws for ws in wb.worksheets}
+    for sheet in sheets:
+        blanks = _blank_columns(sheet)
+        ws = by_name.get(sheet.name)
+        if not blanks or ws is None:
+            continue
+        raw = [[_cell(v) for v in row] for row in ws.iter_rows(values_only=True)]
+        for row_number, row in enumerate(sheet.rows, start=1):
+            if row_number >= len(raw):
+                break
+            for i in blanks:
+                if i < len(raw[row_number]):
+                    row[i] = raw[row_number][i]

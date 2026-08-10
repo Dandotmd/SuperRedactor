@@ -5,9 +5,11 @@ anywhere."""
 import datetime
 import io
 import json
+import unicodedata
+import urllib.parse
 import uuid
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -18,6 +20,7 @@ from app.engine.cleaners import clean
 from app.engine.deredact import deredact_with_count
 from app.engine.detect import suggest_type
 from app.engine.fakers import REDACTION_TYPES
+from app.engine.leakcheck import find_leaks, find_weak_columns
 from app.engine.readers import read_file
 from app.engine.redactor import redact
 from app.engine.standardize import apply_template, make_template, match_columns
@@ -29,6 +32,47 @@ STATIC_DIR = Path(__file__).parent / "static"
 PREVIEW_ROWS = 50
 
 _sessions: dict[str, dict] = {}
+# Each session holds a whole parsed workbook in memory. Bounded so a long
+# working day of uploads can't quietly consume all of it.
+MAX_SESSIONS = 12
+
+
+def _safe_stem(filename: str | None) -> str:
+    """The upload's name with any directory part removed.
+
+    A file called '../../etc/passwd.csv' must not steer where anything is
+    written, and its name is echoed into the download header and ZIP
+    entries.
+    """
+    base = PurePosixPath((filename or "file").replace("\\", "/")).name
+    stem = base.rsplit(".", 1)[0] if "." in base else base
+    stem = stem.replace('"', "").replace("\r", "").replace("\n", "").strip()
+    return stem or "file"
+
+
+def _download(content: bytes, filename: str, media_type: str) -> Response:
+    """Attachment response whose header survives non-Latin-1 filenames.
+
+    Starlette encodes headers as Latin-1, so an em dash or an emoji in the
+    name used to raise and turn every download into a 500.
+    """
+    ascii_name = (
+        unicodedata.normalize("NFKD", filename)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .strip()
+        or "download"
+    )
+    quoted = urllib.parse.quote(filename, safe="")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quoted}'
+            )
+        },
+    )
 
 
 class RedactRequest(BaseModel):
@@ -58,6 +102,8 @@ def _new_session(filename: str, sheets: list) -> dict:
     """Register sheets as a session and describe them the way the UI expects.
     Used both by upload and by the 'continue with this result' handoffs."""
     session_id = uuid.uuid4().hex
+    while len(_sessions) >= MAX_SESSIONS:
+        _sessions.pop(next(iter(_sessions)))
     _sessions[session_id] = {"filename": filename, "sheets": sheets}
     return {
         "session_id": session_id,
@@ -88,20 +134,30 @@ async def upload(file: UploadFile):
     return _new_session(file.filename, sheets)
 
 
+@app.post("/api/redact/check")
+def redact_check(req: RedactRequest):
+    """Warnings to show before anything is downloaded: values that would
+    survive in columns being kept, and columns with too few possible
+    replacements to hide anyone."""
+    session = _get_session(req.session_id)
+    sheets = session["sheets"]
+    return {
+        "leaks": [vars(leak) for leak in find_leaks(sheets, req.config)],
+        "weak_columns": find_weak_columns(sheets, req.config),
+    }
+
+
 @app.post("/api/redact")
 def do_redact(req: RedactRequest):
-    session = _sessions.get(req.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Unknown session — re-upload the file")
+    session = _get_session(req.session_id)
     try:
-        redacted, mapping = redact(session["sheets"], req.config)
+        redacted, mapping, warnings = redact(session["sheets"], req.config, report=True)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    filename: str = session["filename"]
-    stem = filename.rsplit(".", 1)[0]
-    is_xlsx = filename.lower().endswith(".xlsx")
-    if is_xlsx:
+    filename: str = session["filename"] or "file.csv"
+    stem = _safe_stem(filename)
+    if filename.lower().endswith((".xlsx", ".xlsm")):
         out_name, out_bytes = f"{stem}.redacted.xlsx", write_xlsx(redacted)
     else:
         out_name, out_bytes = f"{stem}.redacted.csv", write_csv(redacted[0])
@@ -110,17 +166,14 @@ def do_redact(req: RedactRequest):
         "tool": "superredactor",
         "created": datetime.datetime.now().isoformat(timespec="seconds"),
         "source_file": filename,
+        "warnings": warnings,
         "mapping": mapping,
     }
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(out_name, out_bytes)
         zf.writestr(f"{stem}.mapping.json", json.dumps(mapping_doc, indent=2))
-    return Response(
-        content=buf.getvalue(),
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{stem}.redacted.zip"'},
-    )
+    return _download(buf.getvalue(), f"{stem}.redacted.zip", "application/zip")
 
 
 def _get_session(session_id: str) -> dict:
@@ -155,19 +208,15 @@ def clean_apply(req: CleanRequest):
     enabled = None if req.enabled is None else set(req.enabled)
     cleaned, _ = clean(session["sheets"], enabled)
 
-    filename: str = session["filename"]
-    stem = filename.rsplit(".", 1)[0]
-    if filename.lower().endswith(".xlsx"):
+    filename: str = session["filename"] or "file.csv"
+    stem = _safe_stem(filename)
+    if filename.lower().endswith((".xlsx", ".xlsm")):
         out_name, out_bytes = f"{stem}.cleaned.xlsx", write_xlsx(cleaned)
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     else:
         out_name, out_bytes = f"{stem}.cleaned.csv", write_csv(cleaned[0])
         media = "text/csv"
-    return Response(
-        content=out_bytes,
-        media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
-    )
+    return _download(out_bytes, out_name, media)
 
 
 def _pick_sheet(session: dict, sheet_name: str | None):
@@ -181,12 +230,48 @@ def _pick_sheet(session: dict, sheet_name: str | None):
 
 
 def _require_template(req: StandardizeRequest) -> dict:
-    if not req.template or req.template.get("kind") != "template":
+    bad = (
+        "That file doesn't look like a SuperRedactor template. Make one on the "
+        "'Make a template' screen and save it, then choose that file here."
+    )
+    template = req.template
+    if not template or template.get("kind") != "template":
+        raise HTTPException(status_code=400, detail=bad)
+    columns = template.get("columns")
+    if not isinstance(columns, list) or not columns:
         raise HTTPException(
             status_code=400,
-            detail="That file doesn't look like a SuperRedactor template.json",
+            detail="That template has no columns in it, so there is nothing to "
+            "standardize onto. Make the template again from an example file.",
         )
-    return req.template
+    for column in columns:
+        if not isinstance(column, dict) or not isinstance(column.get("name"), str):
+            raise HTTPException(status_code=400, detail=bad)
+        column.setdefault("type", "text")
+        if column["type"] not in ("text", "date", "number"):
+            column["type"] = "text"
+        if not isinstance(column.get("aliases", {}), dict):
+            column["aliases"] = {}
+        if not isinstance(column.get("values", []), list):
+            column.pop("values", None)
+    return template
+
+
+def _check_columns_exist(sheet, req: StandardizeRequest) -> None:
+    known = set(sheet.headers)
+    for target, source in (req.mapping or {}).items():
+        if source is not None and source not in known:
+            raise HTTPException(
+                status_code=400,
+                detail=f"This file has no column called '{source}'. Choose one of "
+                f"its own columns for '{target}', or leave it empty.",
+            )
+    for extra in req.keep_extras:
+        if extra not in known:
+            raise HTTPException(
+                status_code=400,
+                detail=f"This file has no column called '{extra}' to keep.",
+            )
 
 
 @app.post("/api/clean/commit")
@@ -225,6 +310,8 @@ def standardize_match(req: StandardizeRequest):
 def standardize_preview(req: StandardizeRequest):
     session = _get_session(req.session_id)
     sheet = _pick_sheet(session, req.sheet)
+    _require_template(req)
+    _check_columns_exist(sheet, req)
     result = apply_template(
         sheet, _require_template(req), req.mapping or {}, req.keep_extras
     )
@@ -246,28 +333,28 @@ def standardize_preview(req: StandardizeRequest):
 def standardize_apply(req: StandardizeRequest):
     session = _get_session(req.session_id)
     sheet = _pick_sheet(session, req.sheet)
+    _require_template(req)
+    _check_columns_exist(sheet, req)
     out = apply_template(
         sheet, _require_template(req), req.mapping or {}, req.keep_extras
     ).sheet
-    filename: str = session["filename"]
-    stem = filename.rsplit(".", 1)[0]
-    if filename.lower().endswith(".xlsx"):
+    filename: str = session["filename"] or "file.csv"
+    stem = _safe_stem(filename)
+    if filename.lower().endswith((".xlsx", ".xlsm")):
         out_name, out_bytes = f"{stem}.standardized.xlsx", write_xlsx([out])
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     else:
         out_name, out_bytes = f"{stem}.standardized.csv", write_csv(out)
         media = "text/csv"
-    return Response(
-        content=out_bytes,
-        media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
-    )
+    return _download(out_bytes, out_name, media)
 
 
 @app.post("/api/standardize/commit")
 def standardize_commit(req: StandardizeRequest):
     session = _get_session(req.session_id)
     sheet = _pick_sheet(session, req.sheet)
+    _require_template(req)
+    _check_columns_exist(sheet, req)
     out = apply_template(
         sheet, _require_template(req), req.mapping or {}, req.keep_extras
     ).sheet

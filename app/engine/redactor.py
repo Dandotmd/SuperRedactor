@@ -15,16 +15,44 @@ Config = dict[str, dict[str, str]]
 Mapping = dict[str, dict[str, dict[str, str]]]
 
 
-def redact(sheets: list[Sheet], config: Config) -> tuple[list[Sheet], Mapping]:
+def _real_values(sheets: list[Sheet], config: Config) -> set[str]:
+    """Every real value in every column being redacted. No fake may equal
+    one of these, or the output still contains real data."""
+    values: set[str] = set()
+    for sheet in sheets:
+        for column, action in config.get(sheet.name, {}).items():
+            if action == "drop" or column not in sheet.headers:
+                continue
+            index = sheet.headers.index(column)
+            for row in sheet.rows:
+                cell = row[index]
+                if cell:
+                    values.add(cell)
+    return values
+
+
+def redact(
+    sheets: list[Sheet], config: Config, report: bool = False
+) -> tuple[list[Sheet], Mapping] | tuple[list[Sheet], Mapping, list[str]]:
+    known_sheets = {s.name for s in sheets}
+    for name in config:
+        if name not in known_sheets:
+            raise ValueError(f"No sheet named {name!r} in this file")
+
     generators: dict[str, FakeGenerator] = {}
     by_type: dict[str, dict[str, str]] = {}  # col_type -> {real: fake}
+    issued: set[str] = set()
+    forbidden = _real_values(sheets, config)
     mapping: Mapping = {}
     out: list[Sheet] = []
+    weak_columns: list[str] = []
 
     def fake_for(col_type: str, real: str) -> str:
         gen = generators.get(col_type)
         if gen is None:
-            gen = generators[col_type] = FakeGenerator(col_type)
+            gen = generators[col_type] = FakeGenerator(
+                col_type, issued=issued, forbidden=forbidden
+            )
         values = by_type.setdefault(col_type, {})
         if real not in values:
             values[real] = gen.next(real)
@@ -51,6 +79,11 @@ def redact(sheets: list[Sheet], config: Config) -> tuple[list[Sheet], Mapping]:
                 if i in redact_idx and cell != "":
                     col_type = redact_idx[i]
                     fake = fake_for(col_type, cell)
+                    if (
+                        generators[col_type].exhausted
+                        and sheet.headers[i] not in weak_columns
+                    ):
+                        weak_columns.append(sheet.headers[i])
                     mapping.setdefault(sheet.name, {}).setdefault(
                         sheet.headers[i], {}
                     )[cell] = fake
@@ -60,4 +93,12 @@ def redact(sheets: list[Sheet], config: Config) -> tuple[list[Sheet], Mapping]:
             rows.append(new_row)
         out.append(Sheet(name=sheet.name, headers=headers, rows=rows))
 
-    return out, mapping
+    if not report:
+        return out, mapping
+    warnings = [
+        f"'{column}' has too few different values to hide — some replacements "
+        f"reuse a value that really appears in this column. Consider removing "
+        f"the column instead."
+        for column in weak_columns
+    ]
+    return out, mapping, warnings

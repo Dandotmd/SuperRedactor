@@ -33,10 +33,26 @@ def _number(real: str, rng: random.Random) -> str:
 
 
 class FakeGenerator:
-    """Produces fake values for one column. Values are unique within the
-    generator and never equal to the real value they replace."""
+    """Produces fake values for one column.
 
-    def __init__(self, col_type: str, seed: int | None = None):
+    Two guarantees matter more than realism:
+
+    * a fake is never any real value from the file — otherwise a "redacted"
+      roster still contains real people's names, just on the wrong rows;
+    * a fake is never issued twice — otherwise one fake stands for two real
+      values and restoring the originals silently returns the wrong one.
+
+    `issued` and `forbidden` are shared across every generator in a run so
+    the guarantees hold between columns, not just within one.
+    """
+
+    def __init__(
+        self,
+        col_type: str,
+        seed: int | None = None,
+        issued: set[str] | None = None,
+        forbidden: set[str] | None = None,
+    ):
         if col_type not in REDACTION_TYPES:
             raise ValueError(f"Unknown redaction type: {col_type}")
         self.col_type = col_type
@@ -44,7 +60,12 @@ class FakeGenerator:
         self._rng = random.Random(seed)
         if seed is not None:
             self._faker.seed_instance(seed)
-        self._issued: set[str] = set()
+        self._issued: set[str] = issued if issued is not None else set()
+        self._forbidden: set[str] = forbidden if forbidden is not None else set()
+        # True once the pool of possible fakes was too small to avoid reusing
+        # a real value — the caller warns the user, because such a column
+        # cannot actually be hidden.
+        self.exhausted = False
 
     def _candidate(self, real: str) -> str:
         f, rng = self._faker, self._rng
@@ -76,20 +97,74 @@ class FakeGenerator:
         raise AssertionError("unreachable")
 
     def next(self, real: str) -> str:
-        for _ in range(100):
+        if self.col_type in ("format_preserving", "number") and not any(
+            c.isalnum() for c in real
+        ):
+            # Nothing to hide in "-" or " ": scrambling it would only produce
+            # noise that no longer looks like the original column.
+            return real
+
+        for _ in range(120):
             fake = self._candidate(real)
-            if fake != real and fake not in self._issued:
+            if fake != real and fake not in self._issued and fake not in self._forbidden:
                 self._issued.add(fake)
                 return fake
-        # Generator space exhausted (e.g. thousands of first names):
-        # de-collide with a numeric suffix rather than fail.
+
+        # The pool can be genuinely smaller than the data — 26 single-letter
+        # grade codes have no 27th possibility. Keep the column's shape and
+        # let the caller warn that it cannot be hidden.
+        for _ in range(120):
+            fake = self._candidate(real)
+            if fake != real and fake not in self._issued:
+                self.exhausted = True
+                self._issued.add(fake)
+                return fake
+
         base = self._candidate(real)
         n = 2
         while f"{base} {n}" in self._issued or f"{base} {n}" == real:
             n += 1
         fake = f"{base} {n}"
+        self.exhausted = True
         self._issued.add(fake)
         return fake
+
+
+# Roughly how many different values each generator can produce. Used to warn
+# — before anything is downloaded — that a column has too few possibilities
+# to actually hide anyone. Deliberately conservative.
+_POOL_SIZES = {
+    "person_name": 1_000_000,
+    "first_name": 3_000,
+    "last_name": 1_000,
+    "email": 1_000_000,
+    "phone": 10_000_000,
+    "ssn": 1_000_000,
+    "address": 1_000_000,
+    "city": 1_000,
+    "date": 10_000,
+    "custom_word": 1_000,
+}
+
+
+def _shape_space(value: str) -> int:
+    space = 1
+    for ch in value:
+        if ch.isdigit():
+            space *= 10
+        elif ch.isalpha():
+            space *= 26
+        if space > 10**9:
+            return 10**9
+    return space
+
+
+def estimate_pool(col_type: str, values) -> int:
+    """How many distinct fakes are available for these values."""
+    if col_type in ("format_preserving", "number"):
+        spaces = [_shape_space(v) for v in values if v]
+        return min(spaces) if spaces else 10**9
+    return _POOL_SIZES.get(col_type, 1_000)
 
 
 REDACTION_TYPES: dict[str, str] = {

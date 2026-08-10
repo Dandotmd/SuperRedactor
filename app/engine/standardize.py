@@ -165,6 +165,20 @@ def match_columns(template_cols: list[str], headers: list[str]) -> dict[str, str
     return mapping
 
 
+# 05/06/2024 is the 5th of June in most of the world and the 6th of May in
+# the US. Both readings parse, so the only honest thing is to say which one
+# was used.
+_AMBIGUOUS_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/\d{2,4}$")
+
+
+def _is_ambiguous_date(value: str) -> bool:
+    match = _AMBIGUOUS_DATE.match(value.strip())
+    if not match:
+        return False
+    first, second = int(match.group(1)), int(match.group(2))
+    return first <= 12 and second <= 12 and first != second
+
+
 def _coerce(value: str, col_type: str) -> str | None:
     """Returns the coerced value, or None when the cell can't be coerced."""
     v = value.strip()
@@ -218,6 +232,7 @@ def apply_template(
         columns.append((src_idx[extra], "text", {}))
 
     failed: dict[str, int] = {}
+    ambiguous: dict[str, int] = {}
     unmatched: dict[str, list[str]] = {}
     rows: list[list[str]] = []
     for row in sheet.rows:
@@ -242,9 +257,17 @@ def apply_template(
                 failed[name] = failed.get(name, 0) + 1
                 out_row.append(value)
             else:
+                if col_type == "date" and _is_ambiguous_date(value):
+                    ambiguous[name] = ambiguous.get(name, 0) + 1
                 out_row.append(coerced)
         rows.append(out_row)
 
+    for name, count in ambiguous.items():
+        warnings.append(
+            f"'{name}': {count} date(s) could be read two ways (is 05/06 the 5th "
+            f"of June or the 6th of May?). They were read as month/day, the US "
+            f"convention. Check them if your data is day/month."
+        )
     for name, count in failed.items():
         warnings.append(
             f"'{name}': {count} cell(s) did not fit the expected type and were left as-is"

@@ -57,6 +57,37 @@ def test_redact_returns_zip_with_file_and_mapping():
     assert "Sarah Chen" in mapping["mapping"]["Sheet1"]["name"]
 
 
+LEAKY_CSV = (
+    b"name,emergency_contact,score\n"
+    b"Sarah Chen,Sarah Chen,88\n"
+    b"Bob Ray,Ann Ray,91\n"
+)
+
+
+def test_redact_check_warns_about_values_kept_elsewhere():
+    session_id = upload_bytes("leaky.csv", LEAKY_CSV)
+    body = client.post(
+        "/api/redact/check",
+        json={"session_id": session_id, "config": {"Sheet1": {"name": "person_name"}}},
+    ).json()
+    assert len(body["leaks"]) == 1
+    leak = body["leaks"][0]
+    assert leak["kept_column"] == "emergency_contact"
+    assert leak["redacted_column"] == "name"
+
+
+def test_redact_check_silent_when_no_leak():
+    session_id = upload_bytes("leaky.csv", LEAKY_CSV)
+    body = client.post(
+        "/api/redact/check",
+        json={
+            "session_id": session_id,
+            "config": {"Sheet1": {"name": "person_name", "emergency_contact": "person_name"}},
+        },
+    ).json()
+    assert body["leaks"] == []
+
+
 def test_redact_unknown_session_404():
     resp = client.post("/api/redact", json={"session_id": "nope", "config": {}})
     assert resp.status_code == 404

@@ -202,6 +202,27 @@ def test_explicit_aliases_are_applied():
     assert result.unmatched == {}
 
 
+def test_ambiguous_slash_dates_are_warned_about():
+    sheet = Sheet(name="S", headers=["When"], rows=[["05/06/2024"], ["1/2/2024"]])
+    tpl = {
+        "kind": "template", "version": 1, "name": "t",
+        "columns": [{"name": "dob", "type": "date"}],
+    }
+    result = apply_template(sheet, tpl, {"dob": "When"}, [])
+    assert [r[0] for r in result.sheet.rows] == ["2024-05-06", "2024-01-02"]
+    assert any("month" in w and "dob" in w for w in result.warnings)
+
+
+def test_unambiguous_dates_produce_no_ambiguity_warning():
+    sheet = Sheet(name="S", headers=["When"], rows=[["2024-05-06"], ["12/25/2024"]])
+    tpl = {
+        "kind": "template", "version": 1, "name": "t",
+        "columns": [{"name": "dob", "type": "date"}],
+    }
+    result = apply_template(sheet, tpl, {"dob": "When"}, [])
+    assert not any("month" in w for w in result.warnings)
+
+
 def test_uncoercible_cells_left_intact_and_warned():
     sheet = Sheet(
         name="S",
