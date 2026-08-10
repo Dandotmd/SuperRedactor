@@ -115,22 +115,25 @@ def _guess_vocabulary(values: list[str]) -> list[str] | None:
 def make_template(sheet: Sheet, name: str) -> dict:
     """Describe a sheet's shape so other files can be reshaped to match.
 
-    Columns that repeat a short list of values also remember that list, so
-    spellings can be tidied later. Those values are real data, and templates
-    get shared — so a column whose heading suggests personal information
-    never remembers anything, and the caller is told which columns do.
+    A column that repeats a short list of values *can* remember that list,
+    so spellings get tidied later — but remembering copies real data into a
+    file the tool tells you to commit and share. No list is remembered
+    unless the user asks for it: `can_remember_values` offers the
+    candidates, and `suggested_values` shows what each would contain.
+    Guessing which headings are sensitive is the wrong shape for that
+    decision — a denylist will always be missing somebody's Dx column.
     """
     columns = []
-    carries_values = []
+    offered = []
+    suggested: dict[str, list[str]] = {}
     for i, header in enumerate(sheet.headers):
         values = [row[i] for row in sheet.rows]
         column = {"name": header, "type": _guess_type(values)}
-        sensitive = bool(_tokens(header) & _NEVER_REMEMBERED)
-        if column["type"] == "text" and suggest_type(header) is None and not sensitive:
+        if column["type"] == "text":
             vocabulary = _guess_vocabulary(values)
             if vocabulary:
-                column["values"] = vocabulary
-                carries_values.append(header)
+                offered.append(header)
+                suggested[header] = vocabulary
         columns.append(column)
     return {
         "tool": "superredactor",
@@ -138,7 +141,8 @@ def make_template(sheet: Sheet, name: str) -> dict:
         "version": TEMPLATE_VERSION,
         "name": name,
         "columns": columns,
-        "columns_with_values": carries_values,
+        "can_remember_values": offered,
+        "suggested_values": suggested,
     }
 
 

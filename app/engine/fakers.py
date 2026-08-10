@@ -32,10 +32,19 @@ def _number(real: str, rng: random.Random) -> str:
     return "".join(out)
 
 
-def normalize_value(value: str) -> str:
+# In an identifier or a number, case is part of the value: 'aB3xK9' and
+# 'Ab3Xk9' are two different records. In a name it is not.
+CASE_SENSITIVE_TYPES = frozenset({"format_preserving", "number"})
+
+
+def normalize_value(value: str, col_type: str | None = None) -> str:
     """The form used when deciding whether two values are 'the same real
-    value'. Padding and capitalisation don't make a different person."""
-    return " ".join(value.split()).casefold()
+    value'. Padding never makes a different value; capitalisation does for
+    identifiers but not for names."""
+    collapsed = " ".join(value.split())
+    if col_type in CASE_SENSITIVE_TYPES:
+        return collapsed
+    return collapsed.casefold()
 
 
 class FakeGenerator:
@@ -68,10 +77,10 @@ class FakeGenerator:
             self._faker.seed_instance(seed)
         self._issued: set[str] = issued if issued is not None else set()
         self._forbidden: set[str] = forbidden if forbidden is not None else set()
-        # True once the pool of possible fakes was too small to avoid reusing
-        # a real value — the caller warns the user, because such a column
-        # cannot actually be hidden.
-        self.exhausted = False
+        # Whether the most recent call had to settle for a value it would
+        # rather have avoided. Per call, not sticky: one crowded column must
+        # not make every later column of the same type look crowded too.
+        self.last_exhausted = False
 
     def _candidate(self, real: str) -> str:
         f, rng = self._faker, self._rng
@@ -103,6 +112,7 @@ class FakeGenerator:
         raise AssertionError("unreachable")
 
     def next(self, real: str) -> str:
+        self.last_exhausted = False
         if self.col_type in ("format_preserving", "number") and not any(
             c.isalnum() for c in real
         ):
@@ -112,7 +122,7 @@ class FakeGenerator:
 
         for _ in range(120):
             fake = self._candidate(real)
-            key = normalize_value(fake)
+            key = normalize_value(fake, self.col_type)
             if fake != real and key not in self._issued and key not in self._forbidden:
                 self._issued.add(key)
                 return fake
@@ -122,65 +132,23 @@ class FakeGenerator:
         # let the caller warn that it cannot be hidden.
         for _ in range(120):
             fake = self._candidate(real)
-            key = normalize_value(fake)
+            key = normalize_value(fake, self.col_type)
             if fake != real and key not in self._issued:
-                self.exhausted = True
+                self.last_exhausted = True
                 self._issued.add(key)
                 return fake
 
         base = self._candidate(real)
         n = 2
-        while normalize_value(f"{base} {n}") in self._issued or f"{base} {n}" == real:
+        while (
+            normalize_value(f"{base} {n}", self.col_type) in self._issued
+            or f"{base} {n}" == real
+        ):
             n += 1
         fake = f"{base} {n}"
-        self.exhausted = True
-        self._issued.add(normalize_value(fake))
+        self.last_exhausted = True
+        self._issued.add(normalize_value(fake, self.col_type))
         return fake
-
-
-# How many different values each generator can actually produce. Measured
-# against this Faker version rather than estimated — the first guess put
-# first names at 3,000 when the real list holds 690, so a 400-name roster
-# reused real names with no warning at all.
-#
-#   for name in (...): len({f.first_name() for _ in range(60_000)})
-_POOL_SIZES = {
-    "person_name": 400_000,   # first x last combinations, measured low
-    "first_name": 690,
-    "last_name": 1_000,
-    "email": 1_000_000,
-    "phone": 10_000_000,
-    "ssn": 1_000_000,
-    "address": 1_000_000,
-    "city": 28_000,
-    "date": 10_000,
-    "custom_word": 970,
-}
-
-# Warn well before the pool runs dry: replacements start reusing real values
-# once the column holds a sizeable fraction of everything the generator can
-# produce, and the user needs the warning before that, not after.
-CROWDED_FRACTION = 0.4
-
-
-def _shape_space(value: str) -> int:
-    space = 1
-    for ch in value:
-        if ch.isdigit():
-            space *= 10
-        elif ch.isalpha():
-            space *= 26
-        if space > 10**9:
-            return 10**9
-    return space
-
-
-def estimate_pool(col_type: str, values) -> int:
-    """How many distinct fakes are available for these values."""
-    if col_type in ("format_preserving", "number"):
-        spaces = [_shape_space(v) for v in values if v]
-        return min(spaces) if spaces else 10**9
-    return _POOL_SIZES.get(col_type, 1_000)
 
 
 REDACTION_TYPES: dict[str, str] = {

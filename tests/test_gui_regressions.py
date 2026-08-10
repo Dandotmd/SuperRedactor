@@ -64,9 +64,8 @@ def test_template_does_not_remember_values_of_personal_columns():
         ],
     )
     template = make_template(sheet, name="t")
-    columns = {c["name"]: c for c in template["columns"]}
-    assert "values" not in columns["Client Name"]
-    assert columns["Program"]["values"] == ["Housing", "Treatment"]
+    assert all("values" not in c for c in template["columns"])
+    assert "Program" in template["can_remember_values"]
 
 
 def test_template_does_not_remember_clinical_or_free_text_values():
@@ -83,10 +82,8 @@ def test_template_does_not_remember_clinical_or_free_text_values():
         ],
     )
     template = make_template(sheet, name="t")
-    columns = {c["name"]: c for c in template["columns"]}
-    for sensitive in ("Diagnosis", "Medication", "Notes"):
-        assert "values" not in columns[sensitive], sensitive
-    assert columns["Program"]["values"] == ["Care", "Housing"]
+    assert all("values" not in c for c in template["columns"])
+    assert template["suggested_values"]["Program"] == ["Care", "Housing"]
 
 
 def test_template_reports_which_columns_carry_example_values():
@@ -99,7 +96,7 @@ def test_template_reports_which_columns_carry_example_values():
     template = client.post(
         "/api/standardize/template", json={"session_id": session["session_id"]}
     ).json()
-    assert template["columns_with_values"] == ["Program", "Status"]
+    assert template["can_remember_values"] == ["Program", "Status"]
 
 
 # ---- the key file must announce itself ------------------------------------

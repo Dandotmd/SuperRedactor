@@ -153,14 +153,13 @@ def categorical_sheet():
 
 def test_template_captures_vocabulary_for_categorical_columns():
     template = make_template(categorical_sheet(), name="t")
-    status = next(c for c in template["columns"] if c["name"] == "status")
-    assert sorted(status["values"]) == ["active", "inactive"]
+    assert template["can_remember_values"] == ["status"]
+    assert template["suggested_values"]["status"] == ["active", "inactive"]
 
 
 def test_template_skips_vocabulary_for_high_cardinality_columns():
     template = make_template(categorical_sheet(), name="t")
-    name_col = next(c for c in template["columns"] if c["name"] == "name")
-    assert "values" not in name_col
+    assert "name" not in template["can_remember_values"]
 
 
 def vocab_template():

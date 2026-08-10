@@ -120,12 +120,39 @@ def _decode(data: bytes) -> str:
 
 
 def _sniff_delimiter(text: str) -> str:
-    # Federal data isn't always comma-separated (FEC uses "|", BLS uses tabs).
-    sample = text[:65536]
-    try:
-        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
-    except csv.Error:
+    """Pick the separator that splits the file most consistently.
+
+    Federal data isn't always comma-separated (FEC uses "|", BLS uses
+    tabs). The stdlib sniffer goes by consistency alone, so a pipe-
+    delimited file whose every name reads "LAST, FIRST" looks like a
+    perfectly consistent two-column CSV — collapsing sixteen columns into
+    two. Among separators that split evenly, the one producing more
+    columns is the real one.
+    """
+    sample = "\n".join(text[:65536].splitlines()[:50])
+    if not sample:
         return ","
+
+    best = (",", 0, 0)  # delimiter, consistency, columns
+    for candidate in (",", "|", "\t", ";"):
+        try:
+            rows = [
+                row
+                for row in csv.reader(io.StringIO(sample), delimiter=candidate)
+                if row
+            ]
+        except csv.Error:
+            continue
+        if len(rows) < 2:
+            continue
+        widths = [len(row) for row in rows]
+        common = max(set(widths), key=widths.count)
+        if common < 2:
+            continue
+        consistency = widths.count(common) / len(widths)
+        if (consistency, common) > (best[1], best[2]):
+            best = (candidate, consistency, common)
+    return best[0]
 
 
 # Getting this wrong in the "it's a header" direction is dangerous: the
@@ -231,8 +258,14 @@ def _read_xlsx(data: bytes) -> list[Sheet]:
     sheets = []
     for ws in wb.worksheets:
         rows = [[_cell(v) for v in row] for row in ws.iter_rows(values_only=True)]
-        headers = rows[0] if rows else []
-        headers, body = _normalize(headers, rows[1:])
+        if rows and _has_header(rows[0]):
+            headers, body = rows[0], rows[1:]
+        else:
+            # A spreadsheet can be headerless too, and its first record
+            # would otherwise sit in the header row, which is never redacted.
+            headers = [f"column_{i + 1}" for i in range(len(rows[0]) if rows else 0)]
+            body = rows
+        headers, body = _normalize(headers, body)
         sheets.append(Sheet(name=ws.title, headers=headers, rows=body))
 
     if _contains_formulas(data):

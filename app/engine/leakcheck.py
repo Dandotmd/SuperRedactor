@@ -37,19 +37,27 @@ class Leak:
 
 
 def _key(value: str) -> str:
-    """The form two spellings of the same value share. Runs of whitespace
-    collapse so 'Ida  Wells' in the roster still matches 'Ida Wells' in a
-    sentence."""
-    return " ".join(value.split()).casefold()
+    """The form two spellings of the same value share.
+
+    Whitespace runs collapse and edge punctuation goes, so 'Ida  Wells' in
+    the roster matches 'Ida Wells' in a sentence and 'Ryan Hall Jr.' is
+    found inside 'spoke to Ryan Hall Jr. today'. Both sides of the
+    comparison must strip the same characters or they never meet.
+    """
+    return " ".join(value.split()).strip(_EDGE_PUNCTUATION).casefold()
 
 
 def _redacted_values(sheets, config) -> dict[str, dict[str, str]]:
-    """Normalized value -> {column: original spelling} for every column
-    being redacted, across every sheet."""
+    """Normalized value -> {column: original spelling} for every column the
+    user is getting rid of, replaced or removed, across every sheet.
+
+    Removed columns count: choosing the stronger action must not turn the
+    warning off.
+    """
     values: dict[str, dict[str, str]] = {}
     for sheet in sheets:
         for column, action in config.get(sheet.name, {}).items():
-            if action == "drop" or column not in sheet.headers:
+            if column not in sheet.headers:
                 continue
             index = sheet.headers.index(column)
             for row in sheet.rows:
@@ -130,39 +138,19 @@ def _scan_column(sheet, index: int, tracked, quotable):
     return hits
 
 
-def find_weak_columns(sheets, config: dict[str, dict[str, str]]) -> list[str]:
-    """Columns whose possible replacements are too few to hide anyone.
+def find_weak_columns(sheets, config: dict[str, dict[str, str]], seed: int | None = None):
+    """Columns the tool could not actually hide.
 
-    Counted per replacement *type*, not per column: every column of a type
-    draws from the same pool of fake values, so two 200-name columns crowd
-    the list of first names exactly as much as one 400-name column. Judging
-    each column alone let an ordinary two-column roster exhaust the pool
-    while both columns sat under the threshold.
+    This runs the real redaction and reports which columns ran out of
+    replacements, rather than predicting it from an estimated pool size.
+    Every prediction attempt so far has been wrong in the same way: it
+    counted a different set of values than the generator has to avoid —
+    first per column when the pool is per type, then per type when the
+    generator must also avoid values from other types and from columns
+    marked for removal. Measuring is exact by construction, and costs
+    about the same as the download the user is about to request.
     """
-    from app.engine.fakers import CROWDED_FRACTION, estimate_pool, normalize_value
+    from app.engine.redactor import redact
 
-    values_by_type: dict[str, set[str]] = {}
-    columns_by_type: dict[str, list[str]] = {}
-    for sheet in sheets:
-        for column, action in config.get(sheet.name, {}).items():
-            if action == "drop" or column not in sheet.headers:
-                continue
-            index = sheet.headers.index(column)
-            values = values_by_type.setdefault(action, set())
-            for row in sheet.rows:
-                cell = normalize_value(row[index])
-                if cell:
-                    values.add(cell)
-            names = columns_by_type.setdefault(action, [])
-            if column not in names:
-                names.append(column)
-
-    weak: list[str] = []
-    for col_type, values in values_by_type.items():
-        if not values:
-            continue
-        if len(values) >= estimate_pool(col_type, values) * CROWDED_FRACTION:
-            for column in columns_by_type[col_type]:
-                if column not in weak:
-                    weak.append(column)
+    _, _, weak = redact(sheets, config, report=True, seed=seed)
     return weak

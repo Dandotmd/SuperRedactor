@@ -12,6 +12,13 @@ _PERSON_ROLES = {
 }
 
 
+# Words that can sit beside a role without changing what the column holds.
+_ROLE_QUALIFIERS = {
+    "emergency", "primary", "secondary", "alternate", "legal", "main",
+    "next", "of", "kin", "the", "full", "preferred", "current", "former",
+}
+
+
 def _tokens(header: str) -> list[str]:
     # split camelCase, then non-alphanumerics, then lowercase
     spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", header)
@@ -52,7 +59,9 @@ def suggest_type(header: str) -> str | None:
     if "id" in tokens or "mrn" in tokens or "identifier" in tokens:
         return "format_preserving"
     # Checked last, so "Student ID" is an identifier while a bare
-    # "Student" column holds the student's name.
-    if tokens & _PERSON_ROLES:
+    # "Student" column holds the student's name. Every remaining word must
+    # be part of naming the person — "Emergency Contact" is a name,
+    # "Employee Number" and "Teacher Rating" are not.
+    if tokens & _PERSON_ROLES and tokens <= _PERSON_ROLES | _ROLE_QUALIFIERS:
         return "person_name"
     return None

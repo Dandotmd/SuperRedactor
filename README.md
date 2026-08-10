@@ -163,12 +163,18 @@ supported — open it in Excel and save as `.xlsx` first.
    Take the redacted file out of the ZIP; never forward the ZIP itself.
 
 Within one run the same real value always becomes the same fake value —
-including across sheets — so joins between sheets keep working. Fake values
-are checked against every real value in the file, so a fake name is never
-another person's real name, and one fake never stands for two real values.
+including across sheets, and regardless of stray spaces or capitalisation —
+so joins between sheets keep working. Fake values are checked against every
+real value in the file, so a fake name is not another person's real name and
+one fake never stands for two different values.
 
-Each download generates a **new** key. If you download twice, only the newest
-pair works together.
+Where that becomes impossible — a 400-name roster is larger than the
+generator's own list of first names — the tool says so before you download,
+naming the column. It never reuses a real value silently.
+
+The same file with the same choices always produces the same fake values, so
+downloading twice gives you an interchangeable pair. Change a column and you
+get a different pair.
 
 ### Clean up a file
 
@@ -191,12 +197,11 @@ column names, order, and types (text / dates / numbers) are saved as a small
 portable `template.json`. Commit it to a repo or share it as your team's
 standard.
 
-> Columns that repeat a short list of values (a status, a category) also
-> remember that list, so spellings can be tidied later. **Those remembered
-> values are copied from your file.** Columns whose heading looks personal
-> (name, email, address…) never remember anything, and the screen shows
-> exactly which columns carry example values with a one-click "Forget list"
-> before you save. Check them before sharing a template.
+> A column that repeats a short list of values (a status, a category) *can*
+> remember that list, so spellings get tidied later. **Remembering copies
+> real values out of your file into a file you are told to share**, so it is
+> off unless you tick it, per column, having seen exactly what would be
+> stored. Nothing decides for you which of your columns are sensitive.
 
 *Apply a template*: load a `template.json`, drop in a file from any system, and
 review the proposed mapping. Columns are auto-matched by normalized names, a
@@ -244,9 +249,8 @@ usually a sign the key is from a different run.
 
 ## How it is tested
 
-Just under 200 tests run the engine and the HTTP API, written before the
-code they cover. Beyond the happy paths they pin down the failures that
-matter:
+Around 225 tests run the engine and the HTTP API, written before the code
+they cover. Beyond the happy paths they pin down the failures that matter:
 
 - **The core promise, as a randomized property** (`tests/test_property_no_leak.py`)
   — across hundreds of generated files with random column types, multiple

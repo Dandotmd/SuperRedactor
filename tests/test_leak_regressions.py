@@ -112,12 +112,61 @@ def test_reused_real_names_are_always_warned_about_first():
         sheets = [Sheet(name="S", headers=["first"], rows=[[n] for n in names])]
         config = {"S": {"first": "first_name"}}
 
-        redacted, _ = redact(sheets, config)
+        # Same seed for both, so the check describes this exact run
+        redacted, _ = redact(sheets, config, seed=7)
         reused = {r[0] for r in redacted[0].rows} & set(names)
         if reused:
-            assert find_weak_columns(sheets, config), (
+            assert find_weak_columns(sheets, config, seed=7), (
                 f"{len(reused)} of {count} real names reused with no warning"
             )
+
+
+def _crowding_bypass_case(second_action: str, second_type: str):
+    """A column the generator must avoid, that the prediction didn't count:
+    either a column marked for removal, or a second type drawing on the
+    same kind of value."""
+    from faker import Faker
+
+    from app.engine.readers import Sheet
+
+    faker = Faker()
+    pool: set[str] = set()
+    while len(pool) < 650:
+        pool.add(faker.first_name())
+    names = sorted(pool)
+
+    rows = [[names[i], names[i + 200]] for i in range(200)]
+    sheets = [Sheet(name="S", headers=["Given", "Other"], rows=rows)]
+    config = {"S": {"Given": "first_name", "Other": second_action or second_type}}
+    return sheets, config
+
+
+def test_a_removed_column_still_counts_against_the_pool():
+    """The generator must avoid values from removed columns too, so they
+    crowd the pool exactly as much as replaced ones."""
+    from app.engine.leakcheck import find_weak_columns
+
+    sheets, config = _crowding_bypass_case("drop", "")
+    redacted, _ = redact(sheets, config, seed=11)
+    real = {c.strip() for row in sheets[0].rows for c in row if c.strip()}
+    produced = {c.strip() for row in redacted[0].rows for c in row if c.strip()}
+    if produced & real:
+        assert find_weak_columns(sheets, config, seed=11), (
+            f"{len(produced & real)} real values reused with no warning"
+        )
+
+
+def test_a_second_type_drawing_on_the_same_words_counts_too():
+    from app.engine.leakcheck import find_weak_columns
+
+    sheets, config = _crowding_bypass_case("", "person_name")
+    redacted, _ = redact(sheets, config, seed=13)
+    given = {r[0].strip() for r in sheets[0].rows if r[0].strip()}
+    produced = {r[0].strip() for r in redacted[0].rows if r[0].strip()}
+    if produced & given:
+        assert find_weak_columns(sheets, config, seed=13), (
+            f"{len(produced & given)} real names reused with no warning"
+        )
 
 
 def test_two_columns_of_one_type_share_the_pool_and_are_warned_together():
@@ -144,7 +193,7 @@ def test_two_columns_of_one_type_share_the_pool_and_are_warned_together():
     config = {"S": {"Student First": "first_name", "Guardian First": "first_name"}}
 
     warned = find_weak_columns(sheets, config)
-    assert set(warned) == {"Student First", "Guardian First"}, warned
+    assert {w.column for w in warned} == {"Student First", "Guardian First"}, warned
 
 
 def test_columns_of_one_type_spread_over_sheets_are_warned():
@@ -188,18 +237,6 @@ def test_no_real_first_name_is_reused_at_school_roster_size():
     )
 
 
-def test_warning_fires_before_collisions_actually_start():
-    from app.engine.leakcheck import find_weak_columns
-    from app.engine.readers import Sheet
-
-    for count in (350, 400, 500, 600):
-        rows = [[f"RealName{i}"] for i in range(count)]
-        sheets = [Sheet(name="S", headers=["first"], rows=rows)]
-        assert find_weak_columns(sheets, {"S": {"first": "first_name"}}), (
-            f"{count} distinct names should warn — the pool holds ~690"
-        )
-
-
 def test_no_false_alarm_on_a_normal_sized_column():
     from app.engine.leakcheck import find_weak_columns
     from app.engine.readers import Sheet
@@ -209,13 +246,34 @@ def test_no_false_alarm_on_a_normal_sized_column():
     assert find_weak_columns(sheets, {"S": {"first": "first_name"}}) == []
 
 
-def test_last_name_boundary_warns():
+def test_no_false_alarm_when_the_values_are_not_in_the_generators_own_list():
+    """Names the generator has never heard of leave its pool untouched, so
+    there is nothing to warn about."""
     from app.engine.leakcheck import find_weak_columns
     from app.engine.readers import Sheet
 
-    rows = [[f"RealSurname{i}"] for i in range(500)]
-    sheets = [Sheet(name="S", headers=["last"], rows=rows)]
-    assert find_weak_columns(sheets, {"S": {"last": "last_name"}})
+    rows = [[f"Pseudonym{i}"] for i in range(300)]
+    sheets = [Sheet(name="S", headers=["first"], rows=rows)]
+    assert find_weak_columns(sheets, {"S": {"first": "first_name"}}) == []
+
+
+def test_weak_columns_name_their_sheet():
+    from app.engine.leakcheck import find_weak_columns
+    from app.engine.readers import Sheet
+
+    rows = [[chr(ord("A") + i)] for i in range(26)]
+    sheets = [
+        Sheet(name="Marks", headers=["Grade"], rows=rows),
+        Sheet(name="Other", headers=["Grade"], rows=[["AA-11111"], ["BB-22222"]]),
+    ]
+    weak = find_weak_columns(
+        sheets,
+        {
+            "Marks": {"Grade": "format_preserving"},
+            "Other": {"Grade": "format_preserving"},
+        },
+    )
+    assert [(w.sheet, w.column) for w in weak] == [("Marks", "Grade")]
 
 
 def test_redaction_warns_when_a_column_is_too_small_to_hide_anything():
@@ -224,5 +282,5 @@ def test_redaction_warns_when_a_column_is_too_small_to_hide_anything():
     # 26 single letters: any single-letter fake is somebody's real grade
     rows = [[chr(ord("A") + i)] for i in range(26)]
     sheets = [Sheet(name="S", headers=["grade"], rows=rows)]
-    _, _, warnings = redact(sheets, {"S": {"grade": "format_preserving"}}, report=True)
-    assert any("grade" in w for w in warnings)
+    _, _, weak = redact(sheets, {"S": {"grade": "format_preserving"}}, report=True)
+    assert [w.column for w in weak] == ["grade"]

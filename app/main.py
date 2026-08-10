@@ -4,6 +4,7 @@ anywhere."""
 
 import collections
 import datetime
+import hashlib
 import io
 import json
 import unicodedata
@@ -154,9 +155,15 @@ def redact_check(req: RedactRequest):
     replacements to hide anyone."""
     session = _get_session(req.session_id)
     sheets = session["sheets"]
+    try:
+        weak = find_weak_columns(sheets, req.config, seed=_run_seed(req.session_id, req.config))
+    except ValueError as e:
+        # Same validation the download applies, so a green all-clear can
+        # never be followed by a failed download.
+        raise HTTPException(status_code=400, detail=str(e))
     return {
         "leaks": [vars(leak) for leak in find_leaks(sheets, req.config)],
-        "weak_columns": find_weak_columns(sheets, req.config),
+        "weak_columns": [vars(column) for column in weak],
     }
 
 
@@ -164,9 +171,20 @@ def redact_check(req: RedactRequest):
 def do_redact(req: RedactRequest):
     session = _get_session(req.session_id)
     try:
-        redacted, mapping, warnings = redact(session["sheets"], req.config, report=True)
+        redacted, mapping, weak = redact(
+            session["sheets"],
+            req.config,
+            report=True,
+            seed=_run_seed(req.session_id, req.config),
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    warnings = [
+        f"'{column.column}' on sheet '{column.sheet}' has too few different "
+        f"values to hide — some replacements reuse a value that really "
+        f"appears in this file."
+        for column in weak
+    ]
 
     filename: str = session["filename"] or "file.csv"
     stem = _safe_stem(filename)
@@ -194,6 +212,13 @@ def do_redact(req: RedactRequest):
         f"{stem}.redacted-plus-key-DO-NOT-SHARE.zip",
         "application/zip",
     )
+
+
+def _run_seed(session_id: str, config: dict) -> int:
+    """A stable seed for one file and one set of choices, so the warning
+    shown before the download describes the file actually downloaded."""
+    material = session_id + json.dumps(config, sort_keys=True)
+    return int.from_bytes(hashlib.sha256(material.encode()).digest()[:8], "big")
 
 
 def _get_session(session_id: str) -> dict:

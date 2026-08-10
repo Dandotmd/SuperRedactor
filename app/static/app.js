@@ -434,12 +434,14 @@ async function runRedactCheck() {
     holder.appendChild(p);
   }
 
-  for (const column of body.weak_columns) {
+  const manySheets = state.sheets.length > 1;
+  for (const weak of body.weak_columns) {
     const p = document.createElement("p");
     p.className = "warning-strip";
+    const where = manySheets ? ` on sheet "${weak.sheet}"` : "";
     p.textContent =
-      `"${column}" has too few different values to hide anyone — some ` +
-      `replacements will be values that really appear in this column. ` +
+      `"${weak.column}"${where} has too few different values to hide anyone — ` +
+      `some replacements will be values that really appear in this file. ` +
       `Removing the column is safer.`;
     holder.appendChild(p);
   }
@@ -460,9 +462,9 @@ $("redact-btn").addEventListener(
       $("redact-next").hidden = false;
       if (state.downloaded) {
         showNotice(
-          "That was a second download, and it has a brand-new key. The key " +
-            "from your earlier download will not work on this file — use the " +
-            "newest pair together."
+          "Downloaded again. The same file with the same choices always " +
+            "produces the same fake values, so this pair works exactly like " +
+            "the first one. Change a column and you get a different pair."
         );
       }
       state.downloaded = true;
@@ -775,21 +777,14 @@ function renderTemplateColumns() {
     const p = document.createElement("p");
     p.className = "warning-strip";
     p.textContent =
-      `This template will include example values copied from your file — ` +
-      `the lists shown below for ${remembered.map((c) => `"${c.name}"`).join(", ")}. ` +
-      `If any of them are sensitive, use "Forget list" before you save or share it.`;
-    const forgetAll = document.createElement("button");
-    forgetAll.type = "button";
-    forgetAll.className = "btn-quiet";
-    forgetAll.textContent = "Forget all lists";
-    forgetAll.addEventListener("click", () => {
-      for (const col of stdState.template.columns) delete col.values;
-      renderTemplateColumns();
-    });
-    warning.append(p, forgetAll);
+      `This template will now include real values copied from your file: ` +
+      `${remembered.map((c) => `"${c.name}"`).join(", ")}. ` +
+      `Only keep them if you are willing to share those values with anyone ` +
+      `you give the template to.`;
+    warning.appendChild(p);
   }
   $("std-make-summary").textContent = remembered.length
-    ? "Check the example values above, then save."
+    ? "Check the remembered values above, then save."
     : "Save this as a template file you can reuse or share.";
 
   const holder = $("std-columns");
@@ -821,19 +816,27 @@ function renderTemplateColumns() {
 
     row.append(name, select);
 
-    if (col.values) {
-      const vocab = document.createElement("span");
-      vocab.className = "vocab-note";
-      vocab.textContent = `remembers: ${col.values.join(", ")}`;
-      const drop = document.createElement("button");
-      drop.type = "button";
-      drop.className = "btn-quiet";
-      drop.textContent = "Forget list";
-      drop.addEventListener("click", () => {
-        delete col.values;
+    // Remembering a column's values copies real data into a file meant to
+    // be shared, so it is off until asked for.
+    const candidates = stdState.template.suggested_values || {};
+    if (col.type === "text" && candidates[col.name]) {
+      const label = document.createElement("label");
+      label.className = "keep-label";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = Boolean(col.values);
+      box.addEventListener("change", () => {
+        if (box.checked) col.values = candidates[col.name].slice();
+        else delete col.values;
         renderTemplateColumns();
       });
-      row.append(vocab, drop);
+      label.append(box, "remember its values");
+      const vocab = document.createElement("span");
+      vocab.className = "vocab-note";
+      vocab.textContent = col.values
+        ? `remembering: ${col.values.join(", ")}`
+        : `would remember: ${candidates[col.name].join(", ")}`;
+      row.append(label, vocab);
     }
     holder.appendChild(row);
   }
