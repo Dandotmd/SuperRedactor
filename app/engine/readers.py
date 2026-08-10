@@ -16,12 +16,33 @@ class Sheet:
 
 
 def read_file(filename: str, data: bytes) -> list[Sheet]:
+    """Parse an upload into sheets. Every failure raises ValueError with a
+    message written for someone who has never heard of an encoding."""
     lower = filename.lower()
-    if lower.endswith(".csv"):
-        return [_read_csv(data)]
-    if lower.endswith(".xlsx"):
-        return _read_xlsx(data)
-    raise ValueError(f"Unsupported file type: {filename} (expected .csv or .xlsx)")
+    if not data.strip():
+        raise ValueError("This file is empty — there's nothing to work with.")
+
+    if lower.endswith(".xls"):
+        raise ValueError(
+            "Excel 97-2003 files (.xls) aren't supported. Open the file in Excel "
+            "and use File → Save As → Excel Workbook (.xlsx), then try again."
+        )
+    if lower.endswith(".csv") or lower.endswith(".txt") or lower.endswith(".tsv"):
+        sheets = [_read_csv(data)]
+    elif lower.endswith(".xlsx") or lower.endswith(".xlsm"):
+        sheets = _read_xlsx(data)
+    else:
+        raise ValueError(
+            "This tool reads spreadsheet files: CSV (.csv) or Excel (.xlsx). "
+            f"'{filename}' is something else — try exporting your data as CSV first."
+        )
+
+    if not any(s.rows for s in sheets):
+        raise ValueError(
+            "This file has column headings but no data rows underneath them, "
+            "so there's nothing to process."
+        )
+    return sheets
 
 
 def _cell(value) -> str:
@@ -82,6 +103,13 @@ def _has_header(first_row: list[str]) -> bool:
 
 def _read_csv(data: bytes) -> Sheet:
     text = _decode(data)
+    head = text.lstrip()[:200].lower()
+    if head.startswith("<!doctype html") or head.startswith("<html") or "<body" in head:
+        raise ValueError(
+            "This looks like a saved web page, not a spreadsheet. It usually means "
+            "a download failed or a login page was saved by mistake — try "
+            "downloading the file again."
+        )
     reader = csv.reader(io.StringIO(text), delimiter=_sniff_delimiter(text))
     rows = [row for row in reader if row]
     if rows and _has_header(rows[0]):
@@ -95,7 +123,16 @@ def _read_csv(data: bytes) -> Sheet:
 
 
 def _read_xlsx(data: bytes) -> list[Sheet]:
-    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    try:
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception:
+        # openpyxl raises a wide variety of low-level errors (zip, XML, key)
+        # for damaged or password-protected workbooks.
+        raise ValueError(
+            "This Excel file could not be opened. It may be damaged, "
+            "password-protected, or not really an Excel file. Try opening it in "
+            "Excel and saving a fresh copy."
+        )
     sheets = []
     for ws in wb.worksheets:
         rows = [[_cell(v) for v in row] for row in ws.iter_rows(values_only=True)]

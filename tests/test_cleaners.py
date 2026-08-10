@@ -172,6 +172,42 @@ def test_uniform_iso_dates_not_flagged():
     assert by_kind(analyze(sheets), "date_formats") == []
 
 
+# ---- spreadsheet formula injection ----------------------------------------
+
+def test_detects_and_neutralizes_formula_cells():
+    sheets = [
+        sheet(
+            ["Name", "Note"],
+            [
+                ["Sarah", "=cmd|'/c calc'!A1"],
+                ["Bob", "@SUM(A1:A9)"],
+                ["Maya", "+1234"],
+                ["Tom", "ok"],
+            ],
+        )
+    ]
+    findings = analyze(sheets)
+    ff = by_kind(findings, "formula_injection")
+    assert len(ff) == 1 and ff[0].count == 3
+    cleaned = apply_fixes(sheets, finding_ids(findings))
+    assert [r[1] for r in cleaned[0].rows] == [
+        "'=cmd|'/c calc'!A1",
+        "'@SUM(A1:A9)",
+        "'+1234",
+        "ok",
+    ]
+
+
+def test_negative_numbers_are_not_treated_as_formulas():
+    sheets = [sheet(["Amount"], [["-5"], ["-12.5"], ["3"]])]
+    assert by_kind(analyze(sheets), "formula_injection") == []
+
+
+def test_leading_dash_text_is_treated_as_formula_risk():
+    sheets = [sheet(["Note"], [["-cmd|calc"], ["fine"], ["also fine"]])]
+    assert by_kind(analyze(sheets), "formula_injection")[0].count == 1
+
+
 # ---- selective application ------------------------------------------------
 
 def test_disabled_fixes_are_not_applied():

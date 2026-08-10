@@ -8,11 +8,26 @@ without breaking older files.
 
 import difflib
 import re
+from dataclasses import dataclass, field
 
 from app.engine.cleaners import _DECORATED_NUMBER, _PLAIN_NUMBER, _parse_date, _strip_number
 from app.engine.readers import Sheet
 
 TEMPLATE_VERSION = 1
+
+# A column is treated as categorical (worth capturing a vocabulary for) when
+# it repeats a small set of values — e.g. status codes, not names.
+MAX_VOCABULARY = 12
+MAX_DISTINCT_RATIO = 0.5
+
+
+@dataclass
+class StandardizeResult:
+    sheet: Sheet
+    warnings: list[str] = field(default_factory=list)
+    # column name -> values that matched no vocabulary entry, for the UI to
+    # offer manual mapping. Never guessed at automatically.
+    unmatched: dict[str, list[str]] = field(default_factory=dict)
 
 # Groups of header spellings that mean the same thing (normalized form).
 _SYNONYM_GROUPS = [
@@ -65,19 +80,34 @@ def _guess_type(values: list[str]) -> str:
     return "text"
 
 
+def _guess_vocabulary(values: list[str]) -> list[str] | None:
+    filled = [v.strip() for v in values if v.strip()]
+    if len(filled) < 3:
+        return None
+    distinct = sorted(set(filled))
+    if len(distinct) > MAX_VOCABULARY:
+        return None
+    if len(distinct) / len(filled) > MAX_DISTINCT_RATIO:
+        return None
+    return distinct
+
+
 def make_template(sheet: Sheet, name: str) -> dict:
+    columns = []
+    for i, header in enumerate(sheet.headers):
+        values = [row[i] for row in sheet.rows]
+        column = {"name": header, "type": _guess_type(values)}
+        if column["type"] == "text":
+            vocabulary = _guess_vocabulary(values)
+            if vocabulary:
+                column["values"] = vocabulary
+        columns.append(column)
     return {
         "tool": "superredactor",
         "kind": "template",
         "version": TEMPLATE_VERSION,
         "name": name,
-        "columns": [
-            {
-                "name": header,
-                "type": _guess_type([row[i] for row in sheet.rows]),
-            }
-            for i, header in enumerate(sheet.headers)
-        ],
+        "columns": columns,
     }
 
 
@@ -152,42 +182,65 @@ def _coerce(value: str, col_type: str) -> str | None:
     return value
 
 
+def _vocabulary_lookup(col: dict) -> dict[str, str]:
+    """Normalized spelling -> canonical value. Only exact-after-normalization
+    matches are used; near-miss values are never guessed at, because
+    'active' and 'inactive' are textually similar but opposite in meaning."""
+    lookup = {_norm(v): v for v in col.get("values", [])}
+    for alias, canonical in col.get("aliases", {}).items():
+        lookup[_norm(alias)] = canonical
+    return lookup
+
+
 def apply_template(
     sheet: Sheet,
     template: dict,
     mapping: dict[str, str | None],
     keep_extras: list[str],
-) -> tuple[Sheet, list[str]]:
+) -> StandardizeResult:
     warnings: list[str] = []
     src_idx = {h: i for i, h in enumerate(sheet.headers)}
 
     out_headers: list[str] = []
-    columns: list[tuple[int | None, str]] = []  # (source index, type)
+    columns: list[tuple[int | None, str, dict[str, str]]] = []
     for col in template["columns"]:
         out_headers.append(col["name"])
+        vocabulary = _vocabulary_lookup(col)
         source = mapping.get(col["name"])
         if source is None:
             warnings.append(f"No source column for '{col['name']}' — filled with empty cells")
-            columns.append((None, col["type"]))
+            columns.append((None, col["type"], vocabulary))
         else:
-            columns.append((src_idx[source], col["type"]))
+            columns.append((src_idx[source], col["type"], vocabulary))
 
     for extra in keep_extras:
         out_headers.append(extra)
-        columns.append((src_idx[extra], "text"))
+        columns.append((src_idx[extra], "text", {}))
 
     failed: dict[str, int] = {}
+    unmatched: dict[str, list[str]] = {}
     rows: list[list[str]] = []
     for row in sheet.rows:
         out_row: list[str] = []
-        for (idx, col_type), name in zip(columns, out_headers):
+        for (idx, col_type, vocabulary), name in zip(columns, out_headers):
             if idx is None:
                 out_row.append("")
                 continue
-            coerced = _coerce(row[idx], col_type)
+            value = row[idx]
+            if vocabulary and value.strip():
+                canonical = vocabulary.get(_norm(value))
+                if canonical is not None:
+                    out_row.append(canonical)
+                    continue
+                seen = unmatched.setdefault(name, [])
+                if value not in seen:
+                    seen.append(value)
+                out_row.append(value)
+                continue
+            coerced = _coerce(value, col_type)
             if coerced is None:
                 failed[name] = failed.get(name, 0) + 1
-                out_row.append(row[idx])
+                out_row.append(value)
             else:
                 out_row.append(coerced)
         rows.append(out_row)
@@ -196,5 +249,16 @@ def apply_template(
         warnings.append(
             f"'{name}': {count} cell(s) did not fit the expected type and were left as-is"
         )
+    for name, values in unmatched.items():
+        shown = ", ".join(repr(v) for v in values[:5])
+        more = f" and {len(values) - 5} more" if len(values) > 5 else ""
+        warnings.append(
+            f"'{name}': {len(values)} value(s) are not in the template's list — "
+            f"{shown}{more}. Left unchanged; map them below if they belong."
+        )
 
-    return Sheet(name=sheet.name, headers=out_headers, rows=rows), warnings
+    return StandardizeResult(
+        sheet=Sheet(name=sheet.name, headers=out_headers, rows=rows),
+        warnings=warnings,
+        unmatched=unmatched,
+    )

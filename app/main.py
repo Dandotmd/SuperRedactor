@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.engine.cleaners import clean
-from app.engine.deredact import deredact_text
+from app.engine.deredact import deredact_with_count
 from app.engine.detect import suggest_type
 from app.engine.fakers import REDACTION_TYPES
 from app.engine.readers import read_file
@@ -54,18 +54,14 @@ class StandardizeRequest(BaseModel):
     keep_extras: list[str] = []
 
 
-@app.post("/api/upload")
-async def upload(file: UploadFile):
-    data = await file.read()
-    try:
-        sheets = read_file(file.filename or "upload.csv", data)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+def _new_session(filename: str, sheets: list) -> dict:
+    """Register sheets as a session and describe them the way the UI expects.
+    Used both by upload and by the 'continue with this result' handoffs."""
     session_id = uuid.uuid4().hex
-    _sessions[session_id] = {"filename": file.filename, "sheets": sheets}
+    _sessions[session_id] = {"filename": filename, "sheets": sheets}
     return {
         "session_id": session_id,
-        "filename": file.filename,
+        "filename": filename,
         "redaction_types": REDACTION_TYPES,
         "sheets": [
             {
@@ -80,6 +76,16 @@ async def upload(file: UploadFile):
             for s in sheets
         ],
     }
+
+
+@app.post("/api/upload")
+async def upload(file: UploadFile):
+    data = await file.read()
+    try:
+        sheets = read_file(file.filename or "upload.csv", data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _new_session(file.filename, sheets)
 
 
 @app.post("/api/redact")
@@ -183,6 +189,16 @@ def _require_template(req: StandardizeRequest) -> dict:
     return req.template
 
 
+@app.post("/api/clean/commit")
+def clean_commit(req: CleanRequest):
+    """Hand the cleaned data to the next tool without a re-upload. The
+    original session is left intact so 'start over' still works."""
+    session = _get_session(req.session_id)
+    enabled = None if req.enabled is None else set(req.enabled)
+    cleaned, _ = clean(session["sheets"], enabled)
+    return _new_session(session["filename"], cleaned)
+
+
 @app.post("/api/standardize/template")
 def standardize_template(req: StandardizeRequest):
     session = _get_session(req.session_id)
@@ -209,14 +225,20 @@ def standardize_match(req: StandardizeRequest):
 def standardize_preview(req: StandardizeRequest):
     session = _get_session(req.session_id)
     sheet = _pick_sheet(session, req.sheet)
-    out, warnings = apply_template(
+    result = apply_template(
         sheet, _require_template(req), req.mapping or {}, req.keep_extras
     )
     return {
-        "headers": out.headers,
-        "row_count": len(out.rows),
-        "preview_rows": out.rows[:PREVIEW_ROWS],
-        "warnings": warnings,
+        "headers": result.sheet.headers,
+        "row_count": len(result.sheet.rows),
+        "preview_rows": result.sheet.rows[:PREVIEW_ROWS],
+        "warnings": result.warnings,
+        "unmatched": result.unmatched,
+        "vocabularies": {
+            c["name"]: c["values"]
+            for c in _require_template(req)["columns"]
+            if c.get("values")
+        },
     }
 
 
@@ -224,9 +246,9 @@ def standardize_preview(req: StandardizeRequest):
 def standardize_apply(req: StandardizeRequest):
     session = _get_session(req.session_id)
     sheet = _pick_sheet(session, req.sheet)
-    out, _ = apply_template(
+    out = apply_template(
         sheet, _require_template(req), req.mapping or {}, req.keep_extras
-    )
+    ).sheet
     filename: str = session["filename"]
     stem = filename.rsplit(".", 1)[0]
     if filename.lower().endswith(".xlsx"):
@@ -242,10 +264,27 @@ def standardize_apply(req: StandardizeRequest):
     )
 
 
+@app.post("/api/standardize/commit")
+def standardize_commit(req: StandardizeRequest):
+    session = _get_session(req.session_id)
+    sheet = _pick_sheet(session, req.sheet)
+    out = apply_template(
+        sheet, _require_template(req), req.mapping or {}, req.keep_extras
+    ).sheet
+    return _new_session(session["filename"], [out])
+
+
 @app.post("/api/deredact")
 def do_deredact(req: DeredactRequest):
     mapping = req.mapping.get("mapping", req.mapping)
-    return {"text": deredact_text(req.text, mapping)}
+    if not isinstance(mapping, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="That key file isn't in the expected format. Use the "
+            "mapping.json from the ZIP you downloaded when you redacted.",
+        )
+    text, replacements = deredact_with_count(req.text, mapping)
+    return {"text": text, "replacements": replacements}
 
 
 @app.get("/")

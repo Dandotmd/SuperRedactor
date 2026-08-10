@@ -98,6 +98,8 @@ def clean(
                 column=idx,
             )
 
+        run("formula_injection", lambda: _detect_formula_injection(rows))
+
         # --- last: column removal (shifts indexes, so nothing follows) ---
         run("blank_columns", lambda: _detect_blank_columns(headers, rows))
 
@@ -321,6 +323,38 @@ def _detect_mixed_dates(headers: list[str], rows: list[list[str]], idx: int):
     return (
         len(changed),
         f"'{headers[idx]}': {len(changed)} date(s) in inconsistent formats (normalized to YYYY-MM-DD; ambiguous dates read as US month/day)",
+        samples,
+        fix,
+    )
+
+
+def _is_formula_risk(value: str) -> bool:
+    """Excel executes a cell starting with these characters. A hostile value
+    in a source export can exfiltrate data when the cleaned file is opened,
+    so it is worth neutralizing even though the file 'looks' like data."""
+    if not value:
+        return False
+    if value[0] in "=@\t\r":
+        return True
+    if value[0] in "+-":
+        return not _PLAIN_NUMBER.match(value.strip())
+    return False
+
+
+def _detect_formula_injection(rows: list[list[str]]):
+    risky = [c for row in rows for c in row if _is_formula_risk(c)]
+    if not risky:
+        return None
+    samples = [[c[:40], "'" + c[:40]] for c in risky[:MAX_SAMPLES]]
+
+    def fix():
+        for row in rows:
+            row[:] = ["'" + c if _is_formula_risk(c) else c for c in row]
+
+    return (
+        len(risky),
+        f"{len(risky)} cell(s) start with =, +, - or @ and would run as "
+        f"formulas when opened in Excel (made safe as text)",
         samples,
         fix,
     )

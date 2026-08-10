@@ -2,79 +2,200 @@
 
 const $ = (id) => document.getElementById(id);
 
-const state = {
-  sessionId: null,
-  filename: null,
-  sheets: [],            // from /api/upload
-  types: {},             // redaction type id -> label
-  activeSheet: 0,
-  config: {},            // {sheetName: {column: type | "drop"}}
-};
+// ---- shared helpers ------------------------------------------------------
 
-// ---- tabs ----------------------------------------------------------------
+let busyDepth = 0;
 
-for (const tab of document.querySelectorAll(".tab")) {
-  tab.addEventListener("click", () => {
-    for (const t of document.querySelectorAll(".tab")) {
-      t.classList.toggle("is-active", t === tab);
-      t.setAttribute("aria-selected", String(t === tab));
-    }
-    for (const p of document.querySelectorAll(".panel")) {
-      p.hidden = p.id !== tab.dataset.panel;
-    }
-    clearError();
-  });
+function busy(on, text) {
+  busyDepth += on ? 1 : -1;
+  if (busyDepth < 0) busyDepth = 0;
+  if (text) $("busy-text").textContent = text;
+  $("busy").hidden = busyDepth === 0;
 }
-
-// ---- errors --------------------------------------------------------------
 
 function showError(message) {
   const el = $("error");
   el.textContent = message;
   el.hidden = false;
+  el.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
-function clearError() { $("error").hidden = true; }
 
-async function apiError(resp) {
+function clearError() {
+  $("error").hidden = true;
+}
+
+class SessionLost extends Error {}
+
+/** POST JSON and return the parsed body, or throw an Error carrying a
+ *  message that is safe to show to someone non-technical. */
+async function api(path, body, { raw = false, form = null } = {}) {
+  let resp;
   try {
-    const body = await resp.json();
-    return body.detail || `Request failed (${resp.status})`;
+    resp = form
+      ? await fetch(path, { method: "POST", body: form })
+      : await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
   } catch {
-    return `Request failed (${resp.status})`;
+    throw new Error(
+      "Could not reach SuperRedactor on this computer. Make sure the program is " +
+        "still running in your terminal window, then reload this page."
+    );
+  }
+  if (!resp.ok) {
+    let detail = `Something went wrong (error ${resp.status}).`;
+    try {
+      const parsed = await resp.json();
+      if (parsed && parsed.detail) detail = parsed.detail;
+    } catch {
+      /* keep the generic message */
+    }
+    if (resp.status === 404) throw new SessionLost(detail);
+    throw new Error(detail);
+  }
+  return raw ? resp.blob() : resp.json();
+}
+
+/** Wraps an action with the busy overlay and one consistent error path. */
+function guard(text, fn, onSessionLost) {
+  return async (...args) => {
+    clearError();
+    busy(true, text);
+    try {
+      await fn(...args);
+    } catch (e) {
+      if (e instanceof SessionLost) {
+        showError(
+          "That file is no longer loaded — this happens if SuperRedactor was " +
+            "restarted. Please choose your file again."
+        );
+        if (onSessionLost) onSessionLost();
+      } else {
+        showError(e.message);
+      }
+    } finally {
+      busy(false);
+    }
+  };
+}
+
+function setupDropzone(zoneId, inputId, onFile) {
+  const zone = $(zoneId);
+  const input = $(inputId);
+  const open = () => input.click();
+  zone.addEventListener("click", open);
+  zone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      open();
+    }
+  });
+  zone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    zone.classList.add("is-over");
+  });
+  zone.addEventListener("dragleave", () => zone.classList.remove("is-over"));
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("is-over");
+    if (e.dataTransfer.files.length) onFile(e.dataTransfer.files[0]);
+  });
+  input.addEventListener("change", () => {
+    if (input.files.length) onFile(input.files[0]);
+  });
+}
+
+function sizeHint(file) {
+  const mb = file.size / (1024 * 1024);
+  return mb > 20
+    ? `Reading ${Math.round(mb)} MB — large files can take a moment…`
+    : "Reading your file…";
+}
+
+async function uploadFile(file) {
+  const form = new FormData();
+  form.append("file", file);
+  return api("/api/upload", null, { form });
+}
+
+function downloadBlob(blob, filename) {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 30000);
+}
+
+function renderSheetTabs(holderId, sheets, activeIndex, onPick) {
+  const holder = $(holderId);
+  holder.innerHTML = "";
+  if (!sheets || sheets.length < 2) return;
+  sheets.forEach((sheet, i) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sheet-tab" + (i === activeIndex ? " is-active" : "");
+    btn.textContent = sheet.name;
+    btn.addEventListener("click", () => onPick(i));
+    holder.appendChild(btn);
+  });
+}
+
+function renderTable(tableId, headers, rows) {
+  const table = $(tableId);
+  table.innerHTML = "";
+  const headRow = document.createElement("tr");
+  for (const header of headers) {
+    const th = document.createElement("th");
+    th.textContent = header;
+    headRow.appendChild(th);
+  }
+  table.appendChild(headRow);
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    for (const cell of row) {
+      const td = document.createElement("td");
+      td.textContent = cell;
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
   }
 }
 
-// ---- upload --------------------------------------------------------------
+// ---- tabs ----------------------------------------------------------------
 
-const dropzone = $("dropzone");
-const fileInput = $("file-input");
-
-dropzone.addEventListener("click", () => fileInput.click());
-dropzone.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" || e.key === " ") fileInput.click();
-});
-dropzone.addEventListener("dragover", (e) => {
-  e.preventDefault();
-  dropzone.classList.add("is-over");
-});
-dropzone.addEventListener("dragleave", () => dropzone.classList.remove("is-over"));
-dropzone.addEventListener("drop", (e) => {
-  e.preventDefault();
-  dropzone.classList.remove("is-over");
-  if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
-});
-fileInput.addEventListener("change", () => {
-  if (fileInput.files.length) uploadFile(fileInput.files[0]);
-});
-
-async function uploadFile(file) {
+function showPanel(panelId) {
+  for (const tab of document.querySelectorAll(".tab")) {
+    const active = tab.dataset.panel === panelId;
+    tab.classList.toggle("is-active", active);
+    tab.setAttribute("aria-selected", String(active));
+  }
+  for (const panel of document.querySelectorAll(".panel")) {
+    panel.hidden = panel.id !== panelId;
+  }
   clearError();
-  const form = new FormData();
-  form.append("file", file);
-  const resp = await fetch("/api/upload", { method: "POST", body: form });
-  if (!resp.ok) return showError(await apiError(resp));
-  const body = await resp.json();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
 
+for (const tab of document.querySelectorAll(".tab")) {
+  tab.addEventListener("click", () => showPanel(tab.dataset.panel));
+}
+
+// ==========================================================================
+// REDACT
+// ==========================================================================
+
+const state = {
+  sessionId: null,
+  filename: null,
+  sheets: [],
+  types: {},
+  activeSheet: 0,
+  config: {},
+};
+
+function adoptForRedact(body) {
   state.sessionId = body.session_id;
   state.filename = body.filename;
   state.sheets = body.sheets;
@@ -84,43 +205,44 @@ async function uploadFile(file) {
   for (const sheet of body.sheets) {
     state.config[sheet.name] = { ...sheet.suggestions };
   }
-
-  dropzone.hidden = true;
+  $("dropzone").hidden = true;
   $("workspace").hidden = false;
+  $("redact-next").hidden = true;
   $("file-label").textContent = body.filename;
-  renderSheetTabs();
-  renderTable();
+  renderRedactTabs();
+  renderRedactTable();
 }
 
-$("reset-btn").addEventListener("click", () => {
-  state.sessionId = null;
-  fileInput.value = "";
-  $("workspace").hidden = true;
-  dropzone.hidden = false;
-  clearError();
-});
-
-// ---- preview table -------------------------------------------------------
-
-function renderSheetTabs() {
-  const holder = $("sheet-tabs");
-  holder.innerHTML = "";
-  if (state.sheets.length < 2) return;
-  state.sheets.forEach((sheet, i) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "sheet-tab" + (i === state.activeSheet ? " is-active" : "");
-    btn.textContent = sheet.name;
-    btn.addEventListener("click", () => {
-      state.activeSheet = i;
-      renderSheetTabs();
-      renderTable();
-    });
-    holder.appendChild(btn);
+function renderRedactTabs() {
+  renderSheetTabs("sheet-tabs", state.sheets, state.activeSheet, (i) => {
+    state.activeSheet = i;
+    renderRedactTabs();
+    renderRedactTable();
   });
 }
 
-function renderTable() {
+setupDropzone(
+  "dropzone",
+  "file-input",
+  guard("Reading your file…", async (file) => {
+    busy(true, sizeHint(file));
+    try {
+      adoptForRedact(await uploadFile(file));
+    } finally {
+      busy(false);
+    }
+  })
+);
+
+$("reset-btn").addEventListener("click", () => {
+  state.sessionId = null;
+  $("file-input").value = "";
+  $("workspace").hidden = true;
+  $("dropzone").hidden = false;
+  clearError();
+});
+
+function renderRedactTable() {
   const sheet = state.sheets[state.activeSheet];
   const config = state.config[sheet.name];
   const table = $("preview-table");
@@ -146,21 +268,21 @@ function renderTable() {
     }
 
     const select = document.createElement("select");
-    select.setAttribute("aria-label", `Action for column ${header}`);
+    select.setAttribute("aria-label", `What to do with the column ${header}`);
     select.append(new Option("Keep as is", ""));
     const group = document.createElement("optgroup");
-    group.label = "Redact as…";
+    group.label = "Replace with fake…";
     for (const [id, label] of Object.entries(state.types)) {
       group.append(new Option(label, id));
     }
     select.append(group);
-    select.append(new Option("Drop column", "drop"));
+    select.append(new Option("Remove this column", "drop"));
     select.value = action || "";
     if (action && action !== "drop") select.classList.add("is-redacting");
     select.addEventListener("change", () => {
       if (select.value) config[header] = select.value;
       else delete config[header];
-      renderTable();
+      renderRedactTable();
     });
 
     wrap.append(name, select);
@@ -190,10 +312,6 @@ function renderTable() {
     table.appendChild(tr);
   }
 
-  renderSummary();
-}
-
-function renderSummary() {
   let redacted = 0;
   let dropped = 0;
   for (const cols of Object.values(state.config)) {
@@ -203,97 +321,84 @@ function renderSummary() {
     }
   }
   const parts = [];
-  if (redacted) parts.push(`${redacted} column${redacted === 1 ? "" : "s"} redacted`);
-  if (dropped) parts.push(`${dropped} dropped`);
+  if (redacted) parts.push(`${redacted} column${redacted === 1 ? "" : "s"} will be replaced with fake data`);
+  if (dropped) parts.push(`${dropped} will be removed`);
   $("redact-summary").textContent = parts.length
     ? parts.join(", ")
-    : "No columns marked yet — everything would pass through unchanged.";
+    : "Nothing marked yet — choose at least one column to replace or remove.";
   $("redact-btn").disabled = !parts.length;
 }
 
-// ---- redact + download ---------------------------------------------------
+$("redact-btn").addEventListener(
+  "click",
+  guard(
+    "Redacting…",
+    async () => {
+      const blob = await api(
+        "/api/redact",
+        { session_id: state.sessionId, config: state.config },
+        { raw: true }
+      );
+      const stem = state.filename.replace(/\.[^.]+$/, "");
+      downloadBlob(blob, `${stem}.redacted.zip`);
+      $("redact-next").hidden = false;
+    },
+    () => {
+      $("workspace").hidden = true;
+      $("dropzone").hidden = false;
+    }
+  )
+);
 
-$("redact-btn").addEventListener("click", async () => {
-  clearError();
-  const resp = await fetch("/api/redact", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: state.sessionId, config: state.config }),
-  });
-  if (!resp.ok) return showError(await apiError(resp));
-  const blob = await resp.blob();
-  const stem = state.filename.replace(/\.[^.]+$/, "");
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `${stem}.redacted.zip`;
-  link.click();
-  URL.revokeObjectURL(link.href);
-});
-
-// ---- clean up ------------------------------------------------------------
+// ==========================================================================
+// CLEAN UP
+// ==========================================================================
 
 const cleanState = {
   sessionId: null,
   filename: null,
-  findings: [],       // from /api/clean/analyze
-  enabled: new Set(), // finding ids currently checked
-  sheets: [],         // latest preview sheets
+  findings: [],
+  enabled: new Set(),
+  sheets: [],
   activeSheet: 0,
 };
 
-const cleanDropzone = $("clean-dropzone");
-const cleanFileInput = $("clean-file-input");
+function resetClean() {
+  $("clean-file-input").value = "";
+  $("clean-workspace").hidden = true;
+  $("clean-dropzone").hidden = false;
+}
 
-cleanDropzone.addEventListener("click", () => cleanFileInput.click());
-cleanDropzone.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" || e.key === " ") cleanFileInput.click();
-});
-cleanDropzone.addEventListener("dragover", (e) => {
-  e.preventDefault();
-  cleanDropzone.classList.add("is-over");
-});
-cleanDropzone.addEventListener("dragleave", () => cleanDropzone.classList.remove("is-over"));
-cleanDropzone.addEventListener("drop", (e) => {
-  e.preventDefault();
-  cleanDropzone.classList.remove("is-over");
-  if (e.dataTransfer.files.length) cleanUpload(e.dataTransfer.files[0]);
-});
-cleanFileInput.addEventListener("change", () => {
-  if (cleanFileInput.files.length) cleanUpload(cleanFileInput.files[0]);
-});
-
-async function cleanUpload(file) {
-  clearError();
-  const form = new FormData();
-  form.append("file", file);
-  const resp = await fetch("/api/upload", { method: "POST", body: form });
-  if (!resp.ok) return showError(await apiError(resp));
-  const body = await resp.json();
+async function adoptForClean(body) {
   cleanState.sessionId = body.session_id;
   cleanState.filename = body.filename;
-
-  const analysis = await fetch("/api/clean/analyze", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: cleanState.sessionId }),
-  });
-  if (!analysis.ok) return showError(await apiError(analysis));
-  const data = await analysis.json();
+  const data = await api("/api/clean/analyze", { session_id: body.session_id });
   cleanState.findings = data.findings;
   cleanState.enabled = new Set(data.findings.map((f) => f.id));
-
-  cleanDropzone.hidden = true;
+  cleanState.activeSheet = 0;
+  $("clean-dropzone").hidden = true;
   $("clean-workspace").hidden = false;
   $("clean-file-label").textContent = body.filename;
   renderFindings();
   renderCleanPreview(data.sheets);
 }
 
+setupDropzone(
+  "clean-dropzone",
+  "clean-file-input",
+  guard("Reading your file…", async (file) => {
+    busy(true, sizeHint(file));
+    try {
+      await adoptForClean(await uploadFile(file));
+    } finally {
+      busy(false);
+    }
+  })
+);
+
 $("clean-reset-btn").addEventListener("click", () => {
   cleanState.sessionId = null;
-  cleanFileInput.value = "";
-  $("clean-workspace").hidden = true;
-  cleanDropzone.hidden = false;
+  resetClean();
   clearError();
 });
 
@@ -303,9 +408,9 @@ function renderFindings() {
   if (!cleanState.findings.length) {
     const p = document.createElement("p");
     p.className = "all-clear";
-    p.textContent = "No problems found — this file already looks tidy.";
+    p.textContent = "Good news — no problems found. This file already looks tidy.";
     holder.appendChild(p);
-    $("clean-summary").textContent = "The download will match the original.";
+    $("clean-summary").textContent = "The download will match the file you gave us.";
     return;
   }
   const multiSheet = new Set(cleanState.findings.map((f) => f.sheet)).size > 1;
@@ -316,12 +421,15 @@ function renderFindings() {
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = cleanState.enabled.has(finding.id);
-    box.addEventListener("change", async () => {
-      if (box.checked) cleanState.enabled.add(finding.id);
-      else cleanState.enabled.delete(finding.id);
-      label.classList.toggle("is-off", !box.checked);
-      await refreshCleanPreview();
-    });
+    box.addEventListener(
+      "change",
+      guard("Updating preview…", async () => {
+        if (box.checked) cleanState.enabled.add(finding.id);
+        else cleanState.enabled.delete(finding.id);
+        label.classList.toggle("is-off", !box.checked);
+        await refreshCleanPreview();
+      }, resetClean)
+    );
 
     const bodyEl = document.createElement("div");
     bodyEl.className = "finding-body";
@@ -359,133 +467,98 @@ function renderCleanSummary() {
   const on = cleanState.enabled.size;
   const total = cleanState.findings.length;
   $("clean-summary").textContent = total
-    ? `${on} of ${total} fixes selected`
-    : "The download will match the original.";
+    ? `${on} of ${total} fixes will be applied`
+    : "The download will match the file you gave us.";
 }
 
 async function refreshCleanPreview() {
-  const resp = await fetch("/api/clean/analyze", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: cleanState.sessionId,
-      enabled: [...cleanState.enabled],
-    }),
+  const body = await api("/api/clean/analyze", {
+    session_id: cleanState.sessionId,
+    enabled: [...cleanState.enabled],
   });
-  if (!resp.ok) return showError(await apiError(resp));
-  renderCleanPreview((await resp.json()).sheets);
+  renderCleanPreview(body.sheets);
   renderCleanSummary();
 }
 
 function renderCleanPreview(previewSheets) {
   cleanState.sheets = previewSheets;
   if (cleanState.activeSheet >= previewSheets.length) cleanState.activeSheet = 0;
-
-  const tabs = $("clean-sheet-tabs");
-  tabs.innerHTML = "";
-  if (previewSheets.length > 1) {
-    previewSheets.forEach((s, i) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "sheet-tab" + (i === cleanState.activeSheet ? " is-active" : "");
-      btn.textContent = s.name;
-      btn.addEventListener("click", () => {
-        cleanState.activeSheet = i;
-        renderCleanPreview(cleanState.sheets);
-      });
-      tabs.appendChild(btn);
-    });
-  }
-
-  const table = $("clean-preview-table");
-  table.innerHTML = "";
+  renderSheetTabs("clean-sheet-tabs", previewSheets, cleanState.activeSheet, (i) => {
+    cleanState.activeSheet = i;
+    renderCleanPreview(cleanState.sheets);
+  });
   const sheet = previewSheets[cleanState.activeSheet];
-  const headRow = document.createElement("tr");
-  for (const header of sheet.headers) {
-    const th = document.createElement("th");
-    th.textContent = header;
-    headRow.appendChild(th);
-  }
-  table.appendChild(headRow);
-  for (const row of sheet.preview_rows) {
-    const tr = document.createElement("tr");
-    for (const cell of row) {
-      const td = document.createElement("td");
-      td.textContent = cell;
-      tr.appendChild(td);
-    }
-    table.appendChild(tr);
-  }
+  renderTable("clean-preview-table", sheet.headers, sheet.preview_rows);
 }
 
-$("clean-btn").addEventListener("click", async () => {
-  clearError();
-  const resp = await fetch("/api/clean/apply", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: cleanState.sessionId,
-      enabled: [...cleanState.enabled],
-    }),
-  });
-  if (!resp.ok) return showError(await apiError(resp));
-  const blob = await resp.blob();
-  const stem = cleanState.filename.replace(/\.[^.]+$/, "");
-  const ext = cleanState.filename.toLowerCase().endsWith(".xlsx") ? "xlsx" : "csv";
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `${stem}.cleaned.${ext}`;
-  link.click();
-  URL.revokeObjectURL(link.href);
-});
+$("clean-btn").addEventListener(
+  "click",
+  guard(
+    "Cleaning…",
+    async () => {
+      const blob = await api(
+        "/api/clean/apply",
+        { session_id: cleanState.sessionId, enabled: [...cleanState.enabled] },
+        { raw: true }
+      );
+      const stem = cleanState.filename.replace(/\.[^.]+$/, "");
+      const ext = cleanState.filename.toLowerCase().endsWith(".xlsx") ? "xlsx" : "csv";
+      downloadBlob(blob, `${stem}.cleaned.${ext}`);
+    },
+    resetClean
+  )
+);
 
-// ---- standardize ---------------------------------------------------------
+async function commitClean() {
+  return api("/api/clean/commit", {
+    session_id: cleanState.sessionId,
+    enabled: [...cleanState.enabled],
+  });
+}
+
+$("clean-to-redact").addEventListener(
+  "click",
+  guard("Preparing…", async () => {
+    adoptForRedact(await commitClean());
+    showPanel("panel-redact");
+  }, resetClean)
+);
+
+$("clean-to-standardize").addEventListener(
+  "click",
+  guard("Preparing…", async () => {
+    stdState.pendingSession = await commitClean();
+    showPanel("panel-standardize");
+    setStdMode("apply");
+    if (stdState.template) await startStandardizeApply(stdState.pendingSession);
+    else
+      showError(
+        "Choose your template file above and this data will be standardized with it."
+      );
+  }, resetClean)
+);
+
+// ==========================================================================
+// STANDARDIZE
+// ==========================================================================
 
 const stdState = {
-  // make mode
   makeSessionId: null,
-  makeFilename: null,
-  template: null,      // template being built (make) or loaded (apply)
-  // apply mode
+  makeSheets: [],
+  makeActiveSheet: 0,
+  template: null,
   applySessionId: null,
   applyFilename: null,
-  mapping: {},         // template column -> source header | null
-  extras: [],          // unmatched source headers
+  applySheets: [],
+  applyActiveSheet: 0,
+  mapping: {},
+  extras: [],
   keepExtras: new Set(),
   sourceHeaders: [],
+  vocabularies: {},
+  pendingSession: null,
 };
 
-function setupDropzone(zoneId, inputId, onFile) {
-  const zone = $(zoneId);
-  const input = $(inputId);
-  zone.addEventListener("click", () => input.click());
-  zone.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" || e.key === " ") input.click();
-  });
-  zone.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    zone.classList.add("is-over");
-  });
-  zone.addEventListener("dragleave", () => zone.classList.remove("is-over"));
-  zone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    zone.classList.remove("is-over");
-    if (e.dataTransfer.files.length) onFile(e.dataTransfer.files[0]);
-  });
-  input.addEventListener("change", () => {
-    if (input.files.length) onFile(input.files[0]);
-  });
-}
-
-async function uploadForSession(file) {
-  const form = new FormData();
-  form.append("file", file);
-  const resp = await fetch("/api/upload", { method: "POST", body: form });
-  if (!resp.ok) throw new Error(await apiError(resp));
-  return resp.json();
-}
-
-// mode toggle
 $("std-mode-make").addEventListener("click", () => setStdMode("make"));
 $("std-mode-apply").addEventListener("click", () => setStdMode("apply"));
 
@@ -499,32 +572,52 @@ function setStdMode(mode) {
 
 // --- make a template ---
 
-setupDropzone("std-make-dropzone", "std-make-input", async (file) => {
-  clearError();
-  try {
-    const body = await uploadForSession(file);
-    stdState.makeSessionId = body.session_id;
-    stdState.makeFilename = body.filename;
-    const resp = await fetch("/api/standardize/template", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: body.session_id }),
-    });
-    if (!resp.ok) return showError(await apiError(resp));
-    stdState.template = await resp.json();
-    $("std-make-dropzone").hidden = true;
-    $("std-make-workspace").hidden = false;
-    $("std-make-label").textContent = body.filename;
-    renderTemplateColumns();
-  } catch (e) {
-    showError(e.message);
-  }
-});
+async function loadTemplateSource(body) {
+  stdState.makeSessionId = body.session_id;
+  stdState.makeSheets = body.sheets;
+  stdState.makeActiveSheet = 0;
+  $("std-make-dropzone").hidden = true;
+  $("std-make-workspace").hidden = false;
+  $("std-make-label").textContent = body.filename;
+  await refreshTemplateFromSheet();
+}
+
+async function refreshTemplateFromSheet() {
+  const sheetName = stdState.makeSheets[stdState.makeActiveSheet].name;
+  stdState.template = await api("/api/standardize/template", {
+    session_id: stdState.makeSessionId,
+    sheet: sheetName,
+  });
+  renderSheetTabs(
+    "std-make-sheet-tabs",
+    stdState.makeSheets,
+    stdState.makeActiveSheet,
+    guard("Reading sheet…", async (i) => {
+      stdState.makeActiveSheet = i;
+      await refreshTemplateFromSheet();
+    })
+  );
+  renderTemplateColumns();
+}
+
+setupDropzone(
+  "std-make-dropzone",
+  "std-make-input",
+  guard("Reading your file…", async (file) => {
+    busy(true, sizeHint(file));
+    try {
+      await loadTemplateSource(await uploadFile(file));
+    } finally {
+      busy(false);
+    }
+  })
+);
 
 $("std-make-reset").addEventListener("click", () => {
   $("std-make-input").value = "";
   $("std-make-workspace").hidden = true;
   $("std-make-dropzone").hidden = false;
+  clearError();
 });
 
 function renderTemplateColumns() {
@@ -533,84 +626,145 @@ function renderTemplateColumns() {
   for (const col of stdState.template.columns) {
     const row = document.createElement("div");
     row.className = "map-row";
+
     const name = document.createElement("span");
     name.className = "map-target";
     name.textContent = col.name;
+
     const select = document.createElement("select");
     select.className = "type-select";
-    select.setAttribute("aria-label", `Type for ${col.name}`);
-    for (const t of ["text", "date", "number"]) {
-      select.append(new Option(t, t));
+    select.setAttribute("aria-label", `What ${col.name} holds`);
+    for (const [value, label] of [
+      ["text", "Text"],
+      ["date", "Dates"],
+      ["number", "Numbers"],
+    ]) {
+      select.append(new Option(label, value));
     }
     select.value = col.type;
-    select.addEventListener("change", () => { col.type = select.value; });
+    select.addEventListener("change", () => {
+      col.type = select.value;
+      if (col.type !== "text") delete col.values;
+      renderTemplateColumns();
+    });
+
     row.append(name, select);
+
+    if (col.values) {
+      const vocab = document.createElement("span");
+      vocab.className = "vocab-note";
+      vocab.textContent = `remembers: ${col.values.join(", ")}`;
+      const drop = document.createElement("button");
+      drop.type = "button";
+      drop.className = "btn-quiet";
+      drop.textContent = "Forget list";
+      drop.addEventListener("click", () => {
+        delete col.values;
+        renderTemplateColumns();
+      });
+      row.append(vocab, drop);
+    }
     holder.appendChild(row);
   }
 }
 
 $("std-save-template").addEventListener("click", () => {
+  const name = stdState.template.name || "template";
   const blob = new Blob([JSON.stringify(stdState.template, null, 2)], {
     type: "application/json",
   });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `${stdState.template.name}.template.json`;
-  link.click();
-  URL.revokeObjectURL(link.href);
+  downloadBlob(blob, `${name}.template.json`);
 });
 
 // --- apply a template ---
 
-$("std-template-input").addEventListener("change", async () => {
-  clearError();
-  const file = $("std-template-input").files[0];
-  if (!file) return;
-  try {
-    stdState.template = JSON.parse(await file.text());
-  } catch {
-    return showError("That file isn't valid JSON — expected a template.json.");
-  }
-  if (stdState.template.kind !== "template" || !Array.isArray(stdState.template.columns)) {
-    return showError("That JSON doesn't look like a SuperRedactor template.");
-  }
-  $("std-apply-dropzone").hidden = false;
-});
+$("std-template-input").addEventListener(
+  "change",
+  guard("Reading template…", async () => {
+    const file = $("std-template-input").files[0];
+    if (!file) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      throw new Error(
+        "That file isn't a template. Templates are made on the 'Make a template' " +
+          "screen and their names end in .template.json"
+      );
+    }
+    if (!parsed || parsed.kind !== "template" || !Array.isArray(parsed.columns)) {
+      throw new Error(
+        "That JSON file isn't a SuperRedactor template. Use one you saved on the " +
+          "'Make a template' screen."
+      );
+    }
+    stdState.template = parsed;
+    $("std-apply-dropzone").hidden = false;
+    if (stdState.pendingSession) {
+      const staged = stdState.pendingSession;
+      stdState.pendingSession = null;
+      await startStandardizeApply(staged);
+    }
+  })
+);
 
-setupDropzone("std-apply-dropzone", "std-apply-input", async (file) => {
-  clearError();
-  try {
-    const body = await uploadForSession(file);
-    stdState.applySessionId = body.session_id;
-    stdState.applyFilename = body.filename;
-    stdState.sourceHeaders = body.sheets[0].headers;
-    const resp = await fetch("/api/standardize/match", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: body.session_id,
-        template: stdState.template,
-      }),
-    });
-    if (!resp.ok) return showError(await apiError(resp));
-    const match = await resp.json();
-    stdState.mapping = match.mapping;
-    stdState.extras = match.extras;
-    stdState.keepExtras = new Set();
-    $("std-apply-dropzone").hidden = true;
-    $("std-apply-workspace").hidden = false;
-    $("std-apply-label").textContent = `${file.name} → ${stdState.template.name} template`;
-    renderMapping();
-    await refreshStdPreview();
-  } catch (e) {
-    showError(e.message);
-  }
-});
+async function startStandardizeApply(body) {
+  stdState.applySessionId = body.session_id;
+  stdState.applyFilename = body.filename;
+  stdState.applySheets = body.sheets;
+  stdState.applyActiveSheet = 0;
+  $("std-apply-dropzone").hidden = true;
+  $("std-apply-workspace").hidden = false;
+  $("std-apply-label").textContent = `${body.filename} → ${stdState.template.name}`;
+  await matchActiveSheet();
+}
 
-$("std-apply-reset").addEventListener("click", () => {
+async function matchActiveSheet() {
+  const sheet = stdState.applySheets[stdState.applyActiveSheet];
+  stdState.sourceHeaders = sheet.headers;
+  const match = await api("/api/standardize/match", {
+    session_id: stdState.applySessionId,
+    sheet: sheet.name,
+    template: stdState.template,
+  });
+  stdState.mapping = match.mapping;
+  stdState.extras = match.extras;
+  stdState.keepExtras = new Set();
+  renderSheetTabs(
+    "std-apply-sheet-tabs",
+    stdState.applySheets,
+    stdState.applyActiveSheet,
+    guard("Matching columns…", async (i) => {
+      stdState.applyActiveSheet = i;
+      await matchActiveSheet();
+    })
+  );
+  renderMapping();
+  await refreshStdPreview();
+}
+
+setupDropzone(
+  "std-apply-dropzone",
+  "std-apply-input",
+  guard("Reading your file…", async (file) => {
+    busy(true, sizeHint(file));
+    try {
+      await startStandardizeApply(await uploadFile(file));
+    } finally {
+      busy(false);
+    }
+  })
+);
+
+function resetStdApply() {
   $("std-apply-input").value = "";
   $("std-apply-workspace").hidden = true;
   $("std-apply-dropzone").hidden = false;
+}
+
+$("std-apply-reset").addEventListener("click", () => {
+  resetStdApply();
+  clearError();
 });
 
 function renderMapping() {
@@ -627,21 +781,24 @@ function renderMapping() {
     target.textContent = col.name;
     const type = document.createElement("span");
     type.className = "map-type";
-    type.textContent = col.type;
+    type.textContent = { text: "text", date: "dates", number: "numbers" }[col.type];
 
     const select = document.createElement("select");
-    select.setAttribute("aria-label", `Source column for ${col.name}`);
-    select.append(new Option("— leave empty —", ""));
+    select.setAttribute("aria-label", `Which column becomes ${col.name}`);
+    select.append(new Option("— nothing, leave empty —", ""));
     for (const header of stdState.sourceHeaders) {
       select.append(new Option(header, header));
     }
     select.value = source || "";
-    select.addEventListener("change", async () => {
-      stdState.mapping[col.name] = select.value || null;
-      recomputeExtras();
-      renderMapping();
-      await refreshStdPreview();
-    });
+    select.addEventListener(
+      "change",
+      guard("Updating preview…", async () => {
+        stdState.mapping[col.name] = select.value || null;
+        recomputeExtras();
+        renderMapping();
+        await refreshStdPreview();
+      }, resetStdApply)
+    );
 
     row.append(target, type, select);
     holder.appendChild(row);
@@ -654,19 +811,22 @@ function renderMapping() {
     target.className = "map-target";
     target.textContent = extra;
     const note = document.createElement("span");
-    note.textContent = "not in template — dropped unless kept";
+    note.textContent = "not in your template — will be removed unless you keep it";
     note.style.flex = "1";
     const keep = document.createElement("label");
     keep.className = "keep-label";
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = stdState.keepExtras.has(extra);
-    box.addEventListener("change", async () => {
-      if (box.checked) stdState.keepExtras.add(extra);
-      else stdState.keepExtras.delete(extra);
-      await refreshStdPreview();
-    });
-    keep.append(box, "keep");
+    box.addEventListener(
+      "change",
+      guard("Updating preview…", async () => {
+        if (box.checked) stdState.keepExtras.add(extra);
+        else stdState.keepExtras.delete(extra);
+        await refreshStdPreview();
+      }, resetStdApply)
+    );
+    keep.append(box, "keep it");
     row.append(target, note, keep);
     holder.appendChild(row);
   }
@@ -680,19 +840,18 @@ function recomputeExtras() {
   }
 }
 
+function stdPayload() {
+  return {
+    session_id: stdState.applySessionId,
+    sheet: stdState.applySheets[stdState.applyActiveSheet].name,
+    template: stdState.template,
+    mapping: stdState.mapping,
+    keep_extras: [...stdState.keepExtras],
+  };
+}
+
 async function refreshStdPreview() {
-  const resp = await fetch("/api/standardize/preview", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: stdState.applySessionId,
-      template: stdState.template,
-      mapping: stdState.mapping,
-      keep_extras: [...stdState.keepExtras],
-    }),
-  });
-  if (!resp.ok) return showError(await apiError(resp));
-  const body = await resp.json();
+  const body = await api("/api/standardize/preview", stdPayload());
 
   const warnings = $("std-warnings");
   warnings.innerHTML = "";
@@ -703,83 +862,139 @@ async function refreshStdPreview() {
     warnings.appendChild(p);
   }
 
-  const table = $("std-preview-table");
-  table.innerHTML = "";
-  const headRow = document.createElement("tr");
-  for (const header of body.headers) {
-    const th = document.createElement("th");
-    th.textContent = header;
-    headRow.appendChild(th);
-  }
-  table.appendChild(headRow);
-  for (const row of body.preview_rows) {
-    const tr = document.createElement("tr");
-    for (const cell of row) {
-      const td = document.createElement("td");
-      td.textContent = cell;
-      tr.appendChild(td);
-    }
-    table.appendChild(tr);
-  }
+  renderUnmatchedValues(body.unmatched, body.vocabularies);
+  renderTable("std-preview-table", body.headers, body.preview_rows);
 
   const mapped = Object.values(stdState.mapping).filter(Boolean).length;
   $("std-summary").textContent =
-    `${mapped} of ${stdState.template.columns.length} template columns mapped, ` +
+    `${mapped} of ${stdState.template.columns.length} template columns matched, ` +
     `${body.row_count} rows`;
 }
 
-$("std-download").addEventListener("click", async () => {
-  clearError();
-  const resp = await fetch("/api/standardize/apply", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: stdState.applySessionId,
-      template: stdState.template,
-      mapping: stdState.mapping,
-      keep_extras: [...stdState.keepExtras],
-    }),
-  });
-  if (!resp.ok) return showError(await apiError(resp));
-  const blob = await resp.blob();
-  const stem = stdState.applyFilename.replace(/\.[^.]+$/, "");
-  const ext = stdState.applyFilename.toLowerCase().endsWith(".xlsx") ? "xlsx" : "csv";
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `${stem}.standardized.${ext}`;
-  link.click();
-  URL.revokeObjectURL(link.href);
-});
+/** Values that don't appear in a column's remembered list. The user assigns
+ *  them; nothing is ever guessed, because look-alike values (active /
+ *  inactive) can mean opposite things. */
+function renderUnmatchedValues(unmatched, vocabularies) {
+  const holder = $("std-values");
+  holder.innerHTML = "";
+  const names = Object.keys(unmatched || {});
+  if (!names.length) return;
 
-// ---- de-redact -----------------------------------------------------------
+  const heading = document.createElement("p");
+  heading.className = "hint";
+  heading.innerHTML =
+    "<strong>Unfamiliar values.</strong> These don't match the list your template " +
+    "remembers. Leave them as they are, or say which value they should become.";
+  holder.appendChild(heading);
 
-$("deredact-btn").addEventListener("click", async () => {
-  clearError();
-  const file = $("mapping-input").files[0];
-  if (!file) return showError("Choose the mapping.json from your redaction run first.");
-  const text = $("deredact-in").value;
-  if (!text.trim()) return showError("Paste the AI output you want restored.");
+  for (const column of names) {
+    for (const value of unmatched[column]) {
+      const row = document.createElement("div");
+      row.className = "map-row is-missing";
+      const label = document.createElement("span");
+      label.className = "map-target";
+      label.textContent = `${column}: ${value}`;
 
-  let mapping;
-  try {
-    mapping = JSON.parse(await file.text());
-  } catch {
-    return showError("That file isn't valid JSON — expected the mapping.json from the ZIP.");
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", `What ${value} should become in ${column}`);
+      select.append(new Option("— leave as it is —", ""));
+      for (const canonical of vocabularies[column] || []) {
+        select.append(new Option(`change to "${canonical}"`, canonical));
+      }
+      select.addEventListener(
+        "change",
+        guard("Updating preview…", async () => {
+          const col = stdState.template.columns.find((c) => c.name === column);
+          col.aliases = col.aliases || {};
+          if (select.value) col.aliases[value] = select.value;
+          else delete col.aliases[value];
+          await refreshStdPreview();
+        }, resetStdApply)
+      );
+
+      row.append(label, select);
+      holder.appendChild(row);
+    }
   }
+}
 
-  const resp = await fetch("/api/deredact", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mapping, text }),
-  });
-  if (!resp.ok) return showError(await apiError(resp));
-  const body = await resp.json();
-  $("deredact-out").value = body.text;
-  $("copy-btn").hidden = false;
-});
+$("std-download").addEventListener(
+  "click",
+  guard(
+    "Standardizing…",
+    async () => {
+      const blob = await api("/api/standardize/apply", stdPayload(), { raw: true });
+      const stem = stdState.applyFilename.replace(/\.[^.]+$/, "");
+      const ext = stdState.applyFilename.toLowerCase().endsWith(".xlsx") ? "xlsx" : "csv";
+      downloadBlob(blob, `${stem}.standardized.${ext}`);
+    },
+    resetStdApply
+  )
+);
+
+$("std-to-redact").addEventListener(
+  "click",
+  guard("Preparing…", async () => {
+    adoptForRedact(await api("/api/standardize/commit", stdPayload()));
+    showPanel("panel-redact");
+  }, resetStdApply)
+);
+
+$("std-to-clean").addEventListener(
+  "click",
+  guard("Preparing…", async () => {
+    await adoptForClean(await api("/api/standardize/commit", stdPayload()));
+    showPanel("panel-clean");
+  }, resetStdApply)
+);
+
+// ==========================================================================
+// RESTORE REAL VALUES
+// ==========================================================================
+
+$("deredact-btn").addEventListener(
+  "click",
+  guard("Restoring…", async () => {
+    const file = $("mapping-input").files[0];
+    if (!file) {
+      throw new Error(
+        "First choose the key file (mapping.json) that came in the ZIP with your " +
+          "redacted file."
+      );
+    }
+    const text = $("deredact-in").value;
+    if (!text.trim()) {
+      throw new Error("Paste the AI's answer into the box first.");
+    }
+    let mapping;
+    try {
+      mapping = JSON.parse(await file.text());
+    } catch {
+      throw new Error(
+        "That file isn't the key file. Look for mapping.json inside the ZIP you " +
+          "downloaded when you redacted."
+      );
+    }
+    const body = await api("/api/deredact", { mapping, text });
+    $("deredact-out").value = body.text;
+    $("copy-btn").hidden = false;
+    if (body.replacements === 0) {
+      showError(
+        "Nothing in that text matched this key file — check you're using the key " +
+          "from the same redaction run."
+      );
+    }
+  })
+);
 
 $("copy-btn").addEventListener("click", async () => {
-  await navigator.clipboard.writeText($("deredact-out").value);
-  $("copy-btn").textContent = "Copied";
-  setTimeout(() => { $("copy-btn").textContent = "Copy"; }, 1500);
+  try {
+    await navigator.clipboard.writeText($("deredact-out").value);
+    $("copy-btn").textContent = "Copied";
+    setTimeout(() => {
+      $("copy-btn").textContent = "Copy";
+    }, 1500);
+  } catch {
+    showError("Your browser blocked copying. Select the text and copy it manually.");
+  }
 });

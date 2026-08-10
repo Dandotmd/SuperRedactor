@@ -78,6 +78,15 @@ def test_deredact_translates_text():
     )
     assert resp.status_code == 200
     assert resp.json()["text"] == "Sarah Chen did well."
+    assert resp.json()["replacements"] == 1
+
+
+def test_deredact_reports_zero_replacements_for_unrelated_text():
+    body = client.post(
+        "/api/deredact",
+        json={"mapping": {"S": {"c": {"real": "fake"}}}, "text": "nothing here"},
+    ).json()
+    assert body["replacements"] == 0
 
 
 MESSY_CSV = (
@@ -230,6 +239,51 @@ def test_standardize_unknown_session_404():
         "/api/standardize/match", json={"session_id": "nope", "template": template}
     )
     assert resp.status_code == 404
+
+
+def test_clean_commit_returns_new_session_with_cleaned_data():
+    session_id = upload_messy().json()["session_id"]
+    findings = client.post(
+        "/api/clean/analyze", json={"session_id": session_id}
+    ).json()["findings"]
+    body = client.post(
+        "/api/clean/commit",
+        json={"session_id": session_id, "enabled": [f["id"] for f in findings]},
+    ).json()
+
+    assert body["session_id"] != session_id
+    assert body["sheets"][0]["headers"] == ["Name", "Amount", "Seen"]
+    # the derived session is usable by the other tools
+    redacted = client.post(
+        "/api/redact",
+        json={"session_id": body["session_id"], "config": {"Sheet1": {"Name": "person_name"}}},
+    )
+    assert redacted.status_code == 200
+
+
+def test_original_session_survives_commit():
+    session_id = upload_messy().json()["session_id"]
+    client.post("/api/clean/commit", json={"session_id": session_id, "enabled": []})
+    again = client.post("/api/clean/analyze", json={"session_id": session_id})
+    assert again.status_code == 200
+    assert again.json()["findings"]
+
+
+def test_standardize_commit_returns_new_session():
+    template = make_template_via_api()
+    session_id = upload_bytes("system_b.csv", SYSTEM_B_CSV)
+    mapping = client.post(
+        "/api/standardize/match", json={"session_id": session_id, "template": template}
+    ).json()["mapping"]
+    body = client.post(
+        "/api/standardize/commit",
+        json={
+            "session_id": session_id, "template": template,
+            "mapping": mapping, "keep_extras": [],
+        },
+    ).json()
+    assert body["sheets"][0]["headers"] == ["student_id", "name", "email", "dob"]
+    assert body["sheets"][0]["suggestions"]["name"] == "person_name"
 
 
 def test_index_served():

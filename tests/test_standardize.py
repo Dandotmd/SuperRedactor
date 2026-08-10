@@ -116,23 +116,90 @@ def full_mapping():
 
 
 def test_apply_renames_reorders_and_coerces():
-    out, warnings = apply_template(system_b_sheet(), template(), full_mapping(), [])
+    out = apply_template(system_b_sheet(), template(), full_mapping(), []).sheet
     assert out.headers == ["student_id", "name", "email", "dob", "gpa"]
     assert out.rows[0] == ["S-1001", "Sarah Chen", "", "2014-03-12", "3.8"]
     assert out.rows[1] == ["S-1002", "Bob Ray", "", "2013-11-02", "3.1"]
 
 
 def test_missing_column_produces_warning():
-    _, warnings = apply_template(system_b_sheet(), template(), full_mapping(), [])
-    assert any("email" in w for w in warnings)
+    result = apply_template(system_b_sheet(), template(), full_mapping(), [])
+    assert any("email" in w for w in result.warnings)
 
 
 def test_extras_dropped_by_default_kept_when_requested():
-    out, _ = apply_template(system_b_sheet(), template(), full_mapping(), [])
+    out = apply_template(system_b_sheet(), template(), full_mapping(), []).sheet
     assert "Homeroom" not in out.headers
-    out2, _ = apply_template(system_b_sheet(), template(), full_mapping(), ["Homeroom"])
+    out2 = apply_template(system_b_sheet(), template(), full_mapping(), ["Homeroom"]).sheet
     assert out2.headers[-1] == "Homeroom"
     assert out2.rows[0][-1] == "12B"
+
+
+# ---- value vocabularies ---------------------------------------------------
+
+def categorical_sheet():
+    return Sheet(
+        name="S",
+        headers=["name", "status"],
+        rows=[
+            ["Sarah", "active"],
+            ["Bob", "inactive"],
+            ["Maya", "active"],
+            ["Tom", "active"],
+            ["Ann", "inactive"],
+        ],
+    )
+
+
+def test_template_captures_vocabulary_for_categorical_columns():
+    template = make_template(categorical_sheet(), name="t")
+    status = next(c for c in template["columns"] if c["name"] == "status")
+    assert sorted(status["values"]) == ["active", "inactive"]
+
+
+def test_template_skips_vocabulary_for_high_cardinality_columns():
+    template = make_template(categorical_sheet(), name="t")
+    name_col = next(c for c in template["columns"] if c["name"] == "name")
+    assert "values" not in name_col
+
+
+def vocab_template():
+    return {
+        "kind": "template", "version": 1, "name": "t",
+        "columns": [
+            {"name": "status", "type": "text", "values": ["active", "inactive"]},
+        ],
+    }
+
+
+def test_case_and_whitespace_variants_map_to_canonical_value():
+    sheet = Sheet(name="S", headers=["Status"], rows=[["ACTIVE"], [" Active "], ["In-Active"]])
+    result = apply_template(sheet, vocab_template(), {"status": "Status"}, [])
+    assert [r[0] for r in result.sheet.rows] == ["active", "active", "inactive"]
+
+
+def test_unknown_values_are_left_alone_and_reported_for_mapping():
+    sheet = Sheet(name="S", headers=["Status"], rows=[["active"], ["on leave"], ["on leave"]])
+    result = apply_template(sheet, vocab_template(), {"status": "Status"}, [])
+    assert [r[0] for r in result.sheet.rows] == ["active", "on leave", "on leave"]
+    assert result.unmatched == {"status": ["on leave"]}
+    assert any("status" in w and "on leave" in w for w in result.warnings)
+
+
+def test_similar_but_distinct_values_are_never_fuzzy_merged():
+    # "active"/"inactive" are textually similar; merging them would corrupt data
+    sheet = Sheet(name="S", headers=["Status"], rows=[["activ"], ["inactiv"]])
+    result = apply_template(sheet, vocab_template(), {"status": "Status"}, [])
+    assert [r[0] for r in result.sheet.rows] == ["activ", "inactiv"]
+
+
+def test_explicit_aliases_are_applied():
+    template = vocab_template()
+    template["columns"][0]["aliases"] = {"on leave": "inactive"}
+    sheet = Sheet(name="S", headers=["Status"], rows=[["on leave"], ["ACTIVE"]])
+    result = apply_template(sheet, template, {"status": "Status"}, [])
+    assert [r[0] for r in result.sheet.rows] == ["inactive", "active"]
+    assert result.unmatched == {}
 
 
 def test_uncoercible_cells_left_intact_and_warned():
@@ -145,6 +212,6 @@ def test_uncoercible_cells_left_intact_and_warned():
         "kind": "template", "version": 1, "name": "t",
         "columns": [{"name": "dob", "type": "date"}],
     }
-    out, warnings = apply_template(sheet, tpl, {"dob": "When"}, [])
-    assert [r[0] for r in out.rows] == ["2014-03-12", "unknown", "2014-04-01"]
-    assert any("dob" in w and "1" in w for w in warnings)
+    result = apply_template(sheet, tpl, {"dob": "When"}, [])
+    assert [r[0] for r in result.sheet.rows] == ["2014-03-12", "unknown", "2014-04-01"]
+    assert any("dob" in w and "1" in w for w in result.warnings)

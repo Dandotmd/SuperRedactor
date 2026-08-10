@@ -143,8 +143,50 @@ def test_headerless_csv_gets_synthetic_headers_and_keeps_first_row():
     assert sheets[0].rows[0][1] == "LAMB, THOMAS"
 
 
-def test_unsupported_extension_raises():
+def test_unsupported_extension_explains_what_to_do():
     import pytest
 
-    with pytest.raises(ValueError, match="Unsupported"):
+    with pytest.raises(ValueError) as e:
         read_file("data.parquet", b"whatever")
+    assert "CSV" in str(e.value) and ".xlsx" in str(e.value)
+
+
+def test_legacy_xls_explains_how_to_convert():
+    import pytest
+
+    with pytest.raises(ValueError) as e:
+        read_file("old.xls", b"\xd0\xcf\x11\xe0")
+    assert "Save As" in str(e.value)
+
+
+def test_empty_file_says_so_plainly():
+    import pytest
+
+    with pytest.raises(ValueError) as e:
+        read_file("x.csv", b"")
+    assert "empty" in str(e.value).lower()
+
+
+def test_html_saved_as_csv_is_recognized():
+    import pytest
+
+    data = b"<!DOCTYPE html>\n<html><body><h1>Sign in</h1></body></html>"
+    with pytest.raises(ValueError) as e:
+        read_file("report.csv", data)
+    assert "web page" in str(e.value).lower()
+
+
+def test_corrupt_xlsx_gives_plain_message():
+    import pytest
+
+    with pytest.raises(ValueError) as e:
+        read_file("broken.xlsx", b"PK\x03\x04 not really a workbook")
+    assert "could not be opened" in str(e.value).lower()
+
+
+def test_file_with_headers_but_no_data_rows_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError) as e:
+        read_file("x.csv", b"name,email\n")
+    assert "no data rows" in str(e.value).lower()

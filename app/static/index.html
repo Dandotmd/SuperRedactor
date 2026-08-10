@@ -11,23 +11,30 @@
 <header class="masthead">
   <div class="masthead-inner">
     <h1>SuperRedactor</h1>
-    <span class="stamp" title="The server binds to 127.0.0.1 and makes no outbound requests">Local only</span>
+    <span class="stamp" title="The server runs on this computer only and makes no internet requests">Local only</span>
     <nav class="tabs" role="tablist">
-      <button class="tab is-active" role="tab" aria-selected="true" data-panel="panel-redact">Redact a file</button>
+      <button class="tab is-active" role="tab" aria-selected="true" data-panel="panel-redact">Redact personal info</button>
       <button class="tab" role="tab" aria-selected="false" data-panel="panel-clean">Clean up a file</button>
       <button class="tab" role="tab" aria-selected="false" data-panel="panel-standardize">Standardize</button>
-      <button class="tab" role="tab" aria-selected="false" data-panel="panel-deredact">De-redact AI output</button>
+      <button class="tab" role="tab" aria-selected="false" data-panel="panel-deredact">Restore real values</button>
     </nav>
   </div>
 </header>
 
 <main>
+  <p id="error" class="error" role="alert" hidden></p>
+
+  <!-- ============================ REDACT ============================ -->
   <section id="panel-redact" class="panel is-active" role="tabpanel">
+    <p class="lede">Replace names, emails, and other personal details with
+      realistic fake data, so you can share the file with an AI tool safely.
+      You get a key file to turn the fakes back into the real values later.</p>
+
     <div id="dropzone" class="dropzone" tabindex="0" role="button"
          aria-label="Choose a CSV or Excel file to redact">
-      <p class="dropzone-title">Drop a CSV or .xlsx file here, or click to choose</p>
-      <p class="dropzone-note">The file is parsed in memory on this machine. Nothing is uploaded anywhere.</p>
-      <input id="file-input" type="file" accept=".csv,.xlsx" hidden>
+      <p class="dropzone-title">Drop a CSV or Excel file here, or click to choose one</p>
+      <p class="dropzone-note">Your file is read on this computer only. Nothing is uploaded anywhere.</p>
+      <input id="file-input" type="file" accept=".csv,.xlsx,.xlsm,.tsv,.txt" hidden>
     </div>
 
     <div id="workspace" hidden>
@@ -36,28 +43,37 @@
         <div id="sheet-tabs" class="sheet-tabs"></div>
         <button id="reset-btn" class="btn-quiet" type="button">Start over</button>
       </div>
-      <p class="hint">Set each column to keep, redact, or drop. Suggestions from column
-        names are pre-filled — check every column yourself before downloading.</p>
+      <p class="hint"><strong>Step 1.</strong> For each column, choose whether to keep it,
+        replace it with fake data, or remove it. Columns that look personal are already
+        set for you — please check every one before you download.</p>
       <div class="table-scroll">
         <table id="preview-table"></table>
       </div>
       <div class="actionbar">
         <p id="redact-summary" class="summary" aria-live="polite"></p>
-        <button id="redact-btn" class="btn-primary" type="button">Redact and download ZIP</button>
+        <button id="redact-btn" class="btn-primary" type="button">Redact and download</button>
       </div>
-      <p class="hint">The ZIP holds the redacted file plus <code>mapping.json</code> —
-        the key that turns fake values back into real ones. Keep it local, never share it.</p>
+      <div id="redact-next" class="next-step" hidden>
+        <p><strong>Downloaded.</strong> The ZIP holds two files: the redacted
+          spreadsheet, which is safe to share, and <code>mapping.json</code>, the key
+          that turns fake values back into real ones.</p>
+        <p class="danger-note">Never send <code>mapping.json</code> to anyone or upload
+          it anywhere. Keep it on this computer — anyone who has it can undo the redaction.</p>
+      </div>
     </div>
   </section>
 
+  <!-- ============================ CLEAN ============================= -->
   <section id="panel-clean" class="panel" role="tabpanel" hidden>
+    <p class="lede">Fix a messy spreadsheet: title rows above the real headings,
+      totals at the bottom, duplicate rows, stray spaces, "N/A" markers,
+      $1,234-style numbers, and dates written several different ways.</p>
+
     <div id="clean-dropzone" class="dropzone" tabindex="0" role="button"
          aria-label="Choose a CSV or Excel file to clean up">
-      <p class="dropzone-title">Drop a messy CSV or .xlsx here, or click to choose</p>
-      <p class="dropzone-note">Junk rows, duplicates, stray whitespace, N/A markers,
-        $1,234-style numbers, and mixed date formats are found automatically.
-        Nothing is uploaded anywhere.</p>
-      <input id="clean-file-input" type="file" accept=".csv,.xlsx" hidden>
+      <p class="dropzone-title">Drop a messy CSV or Excel file here, or click to choose one</p>
+      <p class="dropzone-note">Problems are found automatically. You decide which ones to fix.</p>
+      <input id="clean-file-input" type="file" accept=".csv,.xlsx,.xlsm,.tsv,.txt" hidden>
     </div>
 
     <div id="clean-workspace" hidden>
@@ -66,7 +82,10 @@
         <div id="clean-sheet-tabs" class="sheet-tabs"></div>
         <button id="clean-reset-btn" class="btn-quiet" type="button">Start over</button>
       </div>
+      <p class="hint"><strong>Step 1.</strong> Every problem found is ticked and will be
+        fixed. Untick anything you want left alone — the preview below updates as you go.</p>
       <div id="clean-findings" class="findings"></div>
+      <p class="hint"><strong>Step 2.</strong> Check the preview, then download.</p>
       <div class="table-scroll">
         <table id="clean-preview-table"></table>
       </div>
@@ -74,56 +93,79 @@
         <p id="clean-summary" class="summary" aria-live="polite"></p>
         <button id="clean-btn" class="btn-primary" type="button">Download cleaned file</button>
       </div>
+      <div class="next-step">
+        <p>Want to keep going with the cleaned data? No need to download and re-upload:</p>
+        <div class="next-buttons">
+          <button id="clean-to-standardize" class="btn-quiet" type="button">Continue to Standardize →</button>
+          <button id="clean-to-redact" class="btn-quiet" type="button">Continue to Redact →</button>
+        </div>
+      </div>
     </div>
   </section>
 
+  <!-- ========================= STANDARDIZE ========================== -->
   <section id="panel-standardize" class="panel" role="tabpanel" hidden>
+    <p class="lede">Make files from different systems come out with the same
+      columns, in the same order, every time. Save the layout you want once as a
+      template, then apply it to any file.</p>
+
     <div class="mode-toggle" role="tablist">
       <button id="std-mode-apply" class="sheet-tab is-active" type="button">Apply a template</button>
       <button id="std-mode-make" class="sheet-tab" type="button">Make a template</button>
     </div>
 
+    <!-- make -->
     <div id="std-make" hidden>
-      <p class="hint">Drop in a file that already has the layout you want every
-        file to follow. Only the column names and types are saved — no data.</p>
+      <p class="hint"><strong>Step 1.</strong> Drop in a file that already has the layout
+        you want every file to follow. Only the column names and types are saved —
+        none of the data.</p>
       <div id="std-make-dropzone" class="dropzone" tabindex="0" role="button"
-           aria-label="Choose a well-shaped example file">
-        <p class="dropzone-title">Drop a well-shaped .csv or .xlsx here, or click to choose</p>
-        <p class="dropzone-note">Its column layout becomes a reusable template.json.</p>
-        <input id="std-make-input" type="file" accept=".csv,.xlsx" hidden>
+           aria-label="Choose a well-organized example file">
+        <p class="dropzone-title">Drop a well-organized file here, or click to choose one</p>
+        <p class="dropzone-note">Its column layout becomes a reusable template file.</p>
+        <input id="std-make-input" type="file" accept=".csv,.xlsx,.xlsm,.tsv,.txt" hidden>
       </div>
       <div id="std-make-workspace" hidden>
         <div class="workspace-bar">
           <span id="std-make-label" class="file-label"></span>
+          <div id="std-make-sheet-tabs" class="sheet-tabs"></div>
           <button id="std-make-reset" class="btn-quiet" type="button">Start over</button>
         </div>
+        <p class="hint"><strong>Step 2.</strong> Check what each column holds. Columns that
+          repeat a short list of values (like a status) also remember that list, so
+          spellings get tidied up automatically later.</p>
         <div id="std-columns" class="findings"></div>
         <div class="actionbar">
-          <p class="summary">Check the guessed type for each column, then save.</p>
-          <button id="std-save-template" class="btn-primary" type="button">Download template.json</button>
+          <p class="summary">Save this as a template file you can reuse or share.</p>
+          <button id="std-save-template" class="btn-primary" type="button">Download template</button>
         </div>
       </div>
     </div>
 
+    <!-- apply -->
     <div id="std-apply">
-      <p class="hint">Load a template, then drop in a file from any system —
-        its columns are renamed, reordered, and type-corrected to match.</p>
+      <p class="hint"><strong>Step 1.</strong> Choose the template file you saved earlier
+        (it ends in <code>.template.json</code>).</p>
       <label class="field">
-        <span>Template (template.json)</span>
+        <span>Template file</span>
         <input id="std-template-input" type="file" accept=".json">
       </label>
       <div id="std-apply-dropzone" class="dropzone" tabindex="0" role="button"
            aria-label="Choose a file to standardize" hidden>
-        <p class="dropzone-title">Now drop the file to standardize</p>
-        <p class="dropzone-note">Template loaded — matching happens on this machine.</p>
-        <input id="std-apply-input" type="file" accept=".csv,.xlsx" hidden>
+        <p class="dropzone-title">Now drop the file you want to standardize</p>
+        <p class="dropzone-note">Its columns will be renamed and reordered to match your template.</p>
+        <input id="std-apply-input" type="file" accept=".csv,.xlsx,.xlsm,.tsv,.txt" hidden>
       </div>
       <div id="std-apply-workspace" hidden>
         <div class="workspace-bar">
           <span id="std-apply-label" class="file-label"></span>
+          <div id="std-apply-sheet-tabs" class="sheet-tabs"></div>
           <button id="std-apply-reset" class="btn-quiet" type="button">Start over</button>
         </div>
+        <p class="hint"><strong>Step 2.</strong> Check that each of your template's columns
+          is getting the right column from this file. Change anything that looks wrong.</p>
         <div id="std-mapping" class="findings"></div>
+        <div id="std-values"></div>
         <div id="std-warnings"></div>
         <div class="table-scroll">
           <table id="std-preview-table"></table>
@@ -132,37 +174,53 @@
           <p id="std-summary" class="summary" aria-live="polite"></p>
           <button id="std-download" class="btn-primary" type="button">Download standardized file</button>
         </div>
+        <div class="next-step">
+          <p>Keep going with the standardized data without re-uploading:</p>
+          <div class="next-buttons">
+            <button id="std-to-redact" class="btn-quiet" type="button">Continue to Redact →</button>
+            <button id="std-to-clean" class="btn-quiet" type="button">Continue to Clean up →</button>
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
+  <!-- =========================== DE-REDACT ========================== -->
   <section id="panel-deredact" class="panel" role="tabpanel" hidden>
-    <p class="hint">Paste text that came back from an AI tool, add the
-      <code>mapping.json</code> from your redaction run, and every fake value
-      is swapped back to the original. This also happens entirely on this machine.</p>
+    <p class="lede">Turn fake values in an AI tool's answer back into the real ones,
+      using the key file from your redaction. This also happens on this computer only.</p>
+
     <label class="field">
-      <span>mapping.json</span>
+      <span><strong>Step 1.</strong> The key file (mapping.json) from your redaction</span>
       <input id="mapping-input" type="file" accept=".json">
     </label>
     <label class="field">
-      <span>AI output</span>
+      <span><strong>Step 2.</strong> Paste what the AI gave you</span>
       <textarea id="deredact-in" rows="8" placeholder="Paste the AI's answer here"></textarea>
     </label>
     <div class="actionbar">
+      <p class="summary"></p>
       <button id="deredact-btn" class="btn-primary" type="button">Restore real values</button>
     </div>
     <label class="field">
-      <span>Restored text <button id="copy-btn" class="btn-quiet" type="button" hidden>Copy</button></span>
-      <textarea id="deredact-out" rows="8" readonly placeholder="Result appears here"></textarea>
+      <span>Result <button id="copy-btn" class="btn-quiet" type="button" hidden>Copy</button></span>
+      <textarea id="deredact-out" rows="8" readonly placeholder="The restored text appears here"></textarea>
     </label>
   </section>
-
-  <p id="error" class="error" role="alert" hidden></p>
 </main>
 
+<div id="busy" class="busy" hidden aria-live="polite">
+  <div class="busy-box">
+    <div class="busy-bar"><span></span></div>
+    <p id="busy-text">Working…</p>
+  </div>
+</div>
+
 <footer>
-  <p>Open source. Runs offline. Redaction covers whole columns — PII hidden inside
-    free-text cells is not detected, so drop those columns if in doubt.</p>
+  <p>Runs entirely on this computer — no internet connection is used and nothing is
+    saved on the server. Redaction replaces whole columns; personal details written
+    inside sentences (like a comments column) are not detected, so remove those
+    columns if you are unsure.</p>
 </footer>
 
 <script src="/static/app.js"></script>
