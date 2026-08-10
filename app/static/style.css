@@ -145,6 +145,33 @@ td.is-dropped, th.is-dropped .col-name { opacity: 0.35; text-decoration: line-th
   padding: 0.6rem 0.9rem; font-size: 0.9rem;
 }
 
+/* Standardize */
+.mode-toggle { display: flex; gap: 0.25rem; margin: 1.25rem 0 0; }
+.map-row {
+  display: flex; align-items: center; gap: 0.75rem;
+  border: 1px solid var(--line); border-radius: 4px; background: #fff;
+  padding: 0.5rem 0.75rem;
+}
+.map-row.is-missing { border-left: 4px solid var(--stamp); }
+.map-row.is-extra { border-left: 4px solid var(--line); color: var(--ink-soft); }
+.map-target { font-family: var(--font-data); font-size: 0.85rem; font-weight: 700; min-width: 10rem; }
+.map-type {
+  font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-soft); min-width: 4rem;
+}
+.map-row select {
+  font: inherit; font-size: 0.8rem; padding: 0.2rem; border: 1px solid var(--line);
+  border-radius: 3px; background: #fff; flex: 1; max-width: 16rem;
+}
+.map-row .keep-label { display: flex; gap: 0.4rem; align-items: center; font-size: 0.8rem; }
+.warning-strip {
+  border-left: 4px solid #b58900; background: #fdf6e3; border-radius: 0 4px 4px 0;
+  padding: 0.5rem 0.9rem; font-size: 0.85rem; margin: 0.5rem 0;
+}
+.type-select {
+  font: inherit; font-size: 0.75rem; border: 1px solid var(--line); border-radius: 3px;
+}
+
 /* De-redact panel */
 .panel[hidden] { display: none; }
 .field { display: block; margin: 1rem 0; }

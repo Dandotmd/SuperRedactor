@@ -20,6 +20,7 @@ from app.engine.detect import suggest_type
 from app.engine.fakers import REDACTION_TYPES
 from app.engine.readers import read_file
 from app.engine.redactor import redact
+from app.engine.standardize import apply_template, make_template, match_columns
 from app.engine.writers import write_csv, write_xlsx
 
 app = FastAPI(title="SuperRedactor")
@@ -43,6 +44,14 @@ class DeredactRequest(BaseModel):
 class CleanRequest(BaseModel):
     session_id: str
     enabled: list[str] | None = None
+
+
+class StandardizeRequest(BaseModel):
+    session_id: str
+    sheet: str | None = None          # sheet name; default first sheet
+    template: dict | None = None
+    mapping: dict[str, str | None] | None = None
+    keep_extras: list[str] = []
 
 
 @app.post("/api/upload")
@@ -147,6 +156,84 @@ def clean_apply(req: CleanRequest):
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     else:
         out_name, out_bytes = f"{stem}.cleaned.csv", write_csv(cleaned[0])
+        media = "text/csv"
+    return Response(
+        content=out_bytes,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+    )
+
+
+def _pick_sheet(session: dict, sheet_name: str | None):
+    sheets = session["sheets"]
+    if sheet_name is None:
+        return sheets[0]
+    for s in sheets:
+        if s.name == sheet_name:
+            return s
+    raise HTTPException(status_code=400, detail=f"No sheet named {sheet_name!r}")
+
+
+def _require_template(req: StandardizeRequest) -> dict:
+    if not req.template or req.template.get("kind") != "template":
+        raise HTTPException(
+            status_code=400,
+            detail="That file doesn't look like a SuperRedactor template.json",
+        )
+    return req.template
+
+
+@app.post("/api/standardize/template")
+def standardize_template(req: StandardizeRequest):
+    session = _get_session(req.session_id)
+    sheet = _pick_sheet(session, req.sheet)
+    name = (session["filename"] or "template").rsplit(".", 1)[0]
+    return make_template(sheet, name=name)
+
+
+@app.post("/api/standardize/match")
+def standardize_match(req: StandardizeRequest):
+    session = _get_session(req.session_id)
+    sheet = _pick_sheet(session, req.sheet)
+    template = _require_template(req)
+    template_cols = [c["name"] for c in template["columns"]]
+    mapping = match_columns(template_cols, sheet.headers)
+    used = {v for v in mapping.values() if v is not None}
+    return {
+        "mapping": mapping,
+        "extras": [h for h in sheet.headers if h not in used],
+    }
+
+
+@app.post("/api/standardize/preview")
+def standardize_preview(req: StandardizeRequest):
+    session = _get_session(req.session_id)
+    sheet = _pick_sheet(session, req.sheet)
+    out, warnings = apply_template(
+        sheet, _require_template(req), req.mapping or {}, req.keep_extras
+    )
+    return {
+        "headers": out.headers,
+        "row_count": len(out.rows),
+        "preview_rows": out.rows[:PREVIEW_ROWS],
+        "warnings": warnings,
+    }
+
+
+@app.post("/api/standardize/apply")
+def standardize_apply(req: StandardizeRequest):
+    session = _get_session(req.session_id)
+    sheet = _pick_sheet(session, req.sheet)
+    out, _ = apply_template(
+        sheet, _require_template(req), req.mapping or {}, req.keep_extras
+    )
+    filename: str = session["filename"]
+    stem = filename.rsplit(".", 1)[0]
+    if filename.lower().endswith(".xlsx"):
+        out_name, out_bytes = f"{stem}.standardized.xlsx", write_xlsx([out])
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        out_name, out_bytes = f"{stem}.standardized.csv", write_csv(out)
         media = "text/csv"
     return Response(
         content=out_bytes,

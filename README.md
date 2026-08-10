@@ -151,6 +151,27 @@ download the cleaned file in the same format you gave it. Detection is
 deliberately conservative: sheets with fewer than three populated columns
 are left alone rather than guessed at.
 
+### Standardizing files to one layout
+
+The **Standardize** tab makes files from different systems come out in one
+shape, so every downstream script or AI tool sees the same schema.
+
+*Make a template*: drop in a file that already has the layout you want.
+Its column names, order, and auto-guessed types (text / date / number)
+are saved as a small portable `template.json` — no cell data, just the
+schema. Commit it to a repo or share it with your team as the standard.
+
+*Apply a template*: load a `template.json`, drop in a file from any
+system, and review the proposed mapping. Columns are auto-matched by
+normalized names, a synonym table (`DOB` = `Date of Birth` = `BirthDate`),
+shared tokens (`ID` → `student_id`, `Student Name` → `name`), and fuzzy
+matching for typos. Template columns with no source stay in the output as
+empty columns with a visible warning; extra source columns are dropped
+unless you tick *keep*. Values are coerced to the template's types (dates
+→ `YYYY-MM-DD`, `$1,234` → `1234`); cells that don't fit are left intact
+and counted in a warning, never silently blanked. Preview, then download
+`file.standardized.csv/xlsx`.
+
 ## Limits — read before trusting it
 
 - **Whole columns only.** PII buried inside free-text cells ("Spoke with

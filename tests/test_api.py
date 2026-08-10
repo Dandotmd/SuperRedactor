@@ -146,6 +146,92 @@ def test_clean_unknown_session_404():
     assert resp.status_code == 404
 
 
+GOOD_CSV = (
+    b"student_id,name,email,dob\n"
+    b"S-1001,Sarah Chen,s@x.org,2014-03-12\n"
+    b"S-1002,Bob Ray,b@x.org,2013-11-02\n"
+    b"S-1003,Maya Ortiz,m@x.org,2014-07-30\n"
+)
+SYSTEM_B_CSV = (
+    b"Student Name,BirthDate,ID,Homeroom\n"
+    b"Sarah Chen,3/12/2014,S-1001,12B\n"
+    b"Bob Ray,11/2/2013,S-1002,9A\n"
+)
+
+
+def upload_bytes(name, data):
+    return client.post(
+        "/api/upload", files={"file": (name, io.BytesIO(data), "text/csv")}
+    ).json()["session_id"]
+
+
+def make_template_via_api():
+    session_id = upload_bytes("students.csv", GOOD_CSV)
+    return client.post(
+        "/api/standardize/template", json={"session_id": session_id}
+    ).json()
+
+
+def test_standardize_template_from_upload():
+    template = make_template_via_api()
+    assert template["kind"] == "template"
+    assert [c["name"] for c in template["columns"]] == ["student_id", "name", "email", "dob"]
+    assert template["columns"][3]["type"] == "date"
+
+
+def test_standardize_match_proposes_mapping_and_extras():
+    template = make_template_via_api()
+    session_id = upload_bytes("system_b.csv", SYSTEM_B_CSV)
+    body = client.post(
+        "/api/standardize/match",
+        json={"session_id": session_id, "template": template},
+    ).json()
+    assert body["mapping"]["name"] == "Student Name"
+    assert body["mapping"]["dob"] == "BirthDate"
+    assert body["mapping"]["email"] is None
+    assert body["extras"] == ["Homeroom"]
+
+
+def test_standardize_preview_and_apply():
+    template = make_template_via_api()
+    session_id = upload_bytes("system_b.csv", SYSTEM_B_CSV)
+    mapping = client.post(
+        "/api/standardize/match",
+        json={"session_id": session_id, "template": template},
+    ).json()["mapping"]
+
+    preview = client.post(
+        "/api/standardize/preview",
+        json={
+            "session_id": session_id, "template": template,
+            "mapping": mapping, "keep_extras": ["Homeroom"],
+        },
+    ).json()
+    assert preview["headers"] == ["student_id", "name", "email", "dob", "Homeroom"]
+    assert preview["preview_rows"][0] == ["S-1001", "Sarah Chen", "", "2014-03-12", "12B"]
+    assert any("email" in w for w in preview["warnings"])
+
+    resp = client.post(
+        "/api/standardize/apply",
+        json={
+            "session_id": session_id, "template": template,
+            "mapping": mapping, "keep_extras": [],
+        },
+    )
+    assert resp.status_code == 200
+    lines = resp.content.decode().splitlines()
+    assert lines[0] == "student_id,name,email,dob"
+    assert "system_b.standardized.csv" in resp.headers["content-disposition"]
+
+
+def test_standardize_unknown_session_404():
+    template = make_template_via_api()
+    resp = client.post(
+        "/api/standardize/match", json={"session_id": "nope", "template": template}
+    )
+    assert resp.status_code == 404
+
+
 def test_index_served():
     resp = client.get("/")
     assert resp.status_code == 200
