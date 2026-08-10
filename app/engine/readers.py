@@ -393,8 +393,10 @@ def _has_header(first_row: list[str], body: list[list[str]] | None = None) -> bo
             continue
         if _skeleton(text) in shapes:
             data_evidence += 1
-        elif not _DIGIT_RUN.search(text):
-            heading_evidence += 1
+        # A mismatch here is not evidence of a heading. Text varies on its
+        # own — "Mrs. Emma Smith MD" is shaped differently from "Amy Kane"
+        # and is still a name. Only a column of numbers, or a word that
+        # names a column, says the row above is a heading.
 
     if data_evidence and data_evidence >= heading_evidence:
         return False
