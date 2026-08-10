@@ -234,13 +234,26 @@ _YEAR = re.compile(r"^(19|20)\d{2}$")
 _WEAK_MAJORITY = 0.5
 
 
+def _is_unambiguous_value(cell: str) -> bool:
+    """Shapes that are never a column name in any file: an address, a
+    phone number, a social security number, a date. One is enough to say
+    the row is a record — no comparison needed, and no comparison can
+    argue with it."""
+    from app.engine.values import parse_date
+
+    text = cell.strip()
+    if not text:
+        return False
+    return bool(
+        any(shape.match(text) for shape in _STRONG_VALUE_SHAPES) or parse_date(text)
+    )
+
+
 def _looks_like_a_value(cell: str) -> bool:
     text = cell.strip()
     if not text:
         return False
-    return _is_record_code(text) or any(
-        shape.match(text) for shape in _STRONG_VALUE_SHAPES
-    )
+    return _is_record_code(text) or _is_unambiguous_value(text)
 
 
 def _numberish(cell: str) -> bool:
@@ -248,48 +261,81 @@ def _numberish(cell: str) -> bool:
     return bool(text) and any(shape.match(text) for shape in _WEAK_VALUE_SHAPES)
 
 
+_DIGIT_RUN = re.compile(r"\d+")
+_LETTER_RUN = re.compile(r"[A-Za-z]+")
+# Values that mean "nothing here" — neither a heading nor a record, so they
+# should not vote either way.
+_NO_VOTE = {"", "-", "--", "n/a", "na", "null", "none", "nan", "pending", "tbd"}
+
+
+def _skeleton(value: str) -> str:
+    """A value's character-class pattern, digits kept at their own length.
+
+    '(555) 555-1000' -> '(999) 999-9999', 'AB-100' -> 'a-999',
+    'Mar 1, 2024' -> 'a 9, 9999'. Comparing skeletons says whether the
+    first row is built like the rows beneath it without needing a rule per
+    format — enumerating formats is how phone numbers, percentages and
+    text-month dates each got missed in turn. Digit length matters: '2023'
+    over two-digit scores names a year column, while '2001' over 2002 and
+    2003 is a record's own id.
+    """
+    text = _LETTER_RUN.sub("a", value.strip())
+    return _DIGIT_RUN.sub(lambda m: "9" * len(m.group()), text)
+
+
 def _has_header(first_row: list[str], body: list[list[str]] | None = None) -> bool:
     """Whether the first row names the columns or is the first record.
 
     Guessing "heading" when it is really a record is the dangerous
     direction — heading cells are never redacted, so that person ships in
-    the clear. Beyond the shapes no one names a column after, the first
-    row is compared against the column beneath it: a heading over a column
-    of numbers is not itself a number, while a record's ID is.
+    the clear. So the first row is compared against the column beneath it,
+    and only when that comparison says nothing do the shape tables decide.
     """
     filled = [c.strip() for c in first_row if c.strip()]
     if not filled:
         return True
-    if any(_looks_like_a_value(cell) for cell in filled):
+    if not body:
+        # One row on its own: a record if it says so, otherwise assume an
+        # export that produced headings and no rows, which is far more
+        # common and is rejected rather than processed.
+        return not any(_is_unambiguous_value(cell) for cell in filled)
+    if any(_is_unambiguous_value(cell) for cell in filled):
         return False
 
     heading_evidence = data_evidence = 0
     for index, cell in enumerate(first_row):
+        text = cell.strip()
+        if text.lower() in _NO_VOTE:
+            continue
         column = [
             row[index].strip()
             for row in (body or [])[:20]
-            if index < len(row) and row[index].strip()
+            if index < len(row) and row[index].strip().lower() not in _NO_VOTE
         ]
-        if not column or not all(_numberish(v) for v in column):
+        if not column:
             continue
-        text = cell.strip()
-        if not text:
-            continue
-        if not _numberish(text):
-            heading_evidence += 1
-        elif _YEAR.match(text) and not any(
-            len(v) == len(text) for v in column
-        ):
-            # "2023" over two-digit scores names a year column; "2001"
-            # over 2002, 2003 is a record's own id.
-            heading_evidence += 1
-        else:
-            data_evidence += 1
 
-    if data_evidence and not heading_evidence:
+        if not _DIGIT_RUN.search(text):
+            # A word over a column of numbers, dates or codes names it.
+            if all(_DIGIT_RUN.search(v) for v in column):
+                heading_evidence += 1
+            continue
+        shapes = [_skeleton(v) for v in column]
+        common = max(set(shapes), key=shapes.count)
+        if _skeleton(text) == common:
+            data_evidence += 1
+        else:
+            heading_evidence += 1
+
+    if data_evidence and data_evidence >= heading_evidence:
         return False
     if heading_evidence:
         return True
+
+    # Nothing to compare against: fall back to shapes no one names a
+    # column after, then to a majority of number-like cells.
+    if any(_looks_like_a_value(cell) for cell in filled):
+        return False
     weak = sum(
         1
         for cell in filled

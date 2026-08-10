@@ -74,14 +74,27 @@ def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row():
 
     rng = random.Random(602214)
     first_column = [
+        lambda i: f"{100 + i}",               # 3-digit id
         lambda i: f"{1000 + i}",              # 4-digit id
-        lambda i: f"${1000 + i}",             # money
-        lambda i: f"{10 + i}.50",             # decimal
         lambda i: f"{2000 + i}",              # id that looks like a year
-        lambda i: f"H0AK{i:05d}",             # record code
+        lambda i: f"${1000 + i}",             # money
+        lambda i: f"-${100 + i}.00",          # negative money
+        lambda i: f"({100 + i}.00)",          # accounting money
+        lambda i: f"{10 + i}.50",             # decimal
+        lambda i: f"{40 + i}%",               # percentage
+        lambda i: f"{40 + i}.5%",
+        lambda i: f"(555) 555-{1000 + i}",    # phone, as the tool's own faker writes it
+        lambda i: f"555-555-{1000 + i}",
+        lambda i: f"H0AK{i:05d}",             # long record code
+        lambda i: f"AB-{100 + i}",            # short code
+        lambda i: f"P{1000 + i}X",
         lambda i: FAKER.ssn(),
         lambda i: FAKER.email(),
         lambda i: f"2024-03-{(i % 28) + 1:02d}",
+        lambda i: f"3/{(i % 28) + 1}/2024",
+        lambda i: f"Mar {(i % 28) + 1}, 2024",       # text month
+        lambda i: f"March {(i % 28) + 1}, 2024",
+        lambda i: f"{(i % 28) + 1:02d}-Mar-2024",
     ]
     # A file of nothing but prose has no decidable signal at all — see
     # test_an_all_text_headerless_file_is_a_known_limitation.

@@ -249,6 +249,54 @@ def test_ordinary_headings_over_numeric_columns_are_still_headings():
     assert sheets[0].headers == ["Name", "Score", "Rank"]
 
 
+def test_a_missing_value_marker_does_not_outvote_a_record_id():
+    # "N/A" in the first row is neither a heading nor data; a 4-digit id
+    # matching the column below is decisive
+    data = (
+        b"1001,Ada Lovelace,N/A\n"
+        b"1002,Grace Hopper,42\n"
+        b"1003,Alan Turing,37\n"
+        b"1004,Katherine Johnson,55\n"
+    )
+    sheets = read_file("roster.csv", data)
+    assert sheets[0].headers[0].startswith("column_"), sheets[0].headers
+    assert len(sheets[0].rows) == 4
+
+
+def test_clean_does_not_promote_a_record_on_a_narrow_sheet():
+    from app.engine.cleaners import analyze, apply_fixes
+
+    data = (
+        b"Roster\n"
+        b"AB-100,Ada Lovelace\n"
+        b"AB-101,Grace Hopper\n"
+        b"AB-102,Alan Turing\n"
+    )
+    sheets = read_file("r.csv", data)
+    cleaned = apply_fixes(sheets, {f.id for f in analyze(sheets)})
+    assert "Ada Lovelace" not in cleaned[0].headers, cleaned[0].headers
+
+
+def test_a_single_record_file_is_kept_when_it_says_it_is_one():
+    data = b"1001,Ada Lovelace,ada@school.edu\n"
+    sheets = read_file("one.csv", data)
+    assert len(sheets[0].rows) == 1
+    assert sheets[0].rows[0][1] == "Ada Lovelace"
+
+
+def test_a_headings_only_file_is_still_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="no data rows"):
+        read_file("empty.csv", b"name,email\n")
+
+
+def test_a_coded_heading_over_numbers_stays_a_heading():
+    data = b"ICD10CM2021,Count\n12345,10\n23456,20\n34567,30\n"
+    sheets = read_file("x.csv", data)
+    assert sheets[0].headers == ["ICD10CM2021", "Count"]
+
+
 # ---- N2: headerless xlsx --------------------------------------------------
 
 def test_headerless_xlsx_is_detected():
