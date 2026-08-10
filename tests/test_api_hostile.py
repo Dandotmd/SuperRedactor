@@ -211,16 +211,19 @@ def test_safe_stem_strips_control_characters_and_leading_dots():
     assert _safe_stem("  .. ") == "file"
 
 
-def test_run_picks_a_free_port_when_the_default_is_busy():
+def test_run_picks_a_free_port_when_the_first_one_is_busy():
     import socket
 
-    from app.main import DEFAULT_PORT, _free_port
+    from app.main import _free_port
 
+    # Bind an arbitrary free port, then ask for one starting there, so the
+    # test doesn't depend on whether the real app happens to be running.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
-        taken.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        taken.bind(("127.0.0.1", DEFAULT_PORT))
+        taken.bind(("127.0.0.1", 0))
         taken.listen(1)
-        assert _free_port() != DEFAULT_PORT
+        busy = taken.getsockname()[1]
+        chosen = _free_port(start=busy)
+        assert chosen is not None and chosen != busy
 
 
 def test_keep_extras_naming_a_missing_column_is_rejected():

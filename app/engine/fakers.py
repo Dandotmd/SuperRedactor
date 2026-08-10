@@ -32,6 +32,12 @@ def _number(real: str, rng: random.Random) -> str:
     return "".join(out)
 
 
+def normalize_value(value: str) -> str:
+    """The form used when deciding whether two values are 'the same real
+    value'. Padding and capitalisation don't make a different person."""
+    return " ".join(value.split()).casefold()
+
+
 class FakeGenerator:
     """Produces fake values for one column.
 
@@ -106,8 +112,9 @@ class FakeGenerator:
 
         for _ in range(120):
             fake = self._candidate(real)
-            if fake != real and fake not in self._issued and fake not in self._forbidden:
-                self._issued.add(fake)
+            key = normalize_value(fake)
+            if fake != real and key not in self._issued and key not in self._forbidden:
+                self._issued.add(key)
                 return fake
 
         # The pool can be genuinely smaller than the data — 26 single-letter
@@ -115,18 +122,19 @@ class FakeGenerator:
         # let the caller warn that it cannot be hidden.
         for _ in range(120):
             fake = self._candidate(real)
-            if fake != real and fake not in self._issued:
+            key = normalize_value(fake)
+            if fake != real and key not in self._issued:
                 self.exhausted = True
-                self._issued.add(fake)
+                self._issued.add(key)
                 return fake
 
         base = self._candidate(real)
         n = 2
-        while f"{base} {n}" in self._issued or f"{base} {n}" == real:
+        while normalize_value(f"{base} {n}") in self._issued or f"{base} {n}" == real:
             n += 1
         fake = f"{base} {n}"
         self.exhausted = True
-        self._issued.add(fake)
+        self._issued.add(normalize_value(fake))
         return fake
 
 

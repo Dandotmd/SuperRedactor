@@ -6,7 +6,7 @@ same real value gets the same fake wherever it appears (keeps joins
 between sheets intact, e.g. an ID used in two sheets).
 """
 
-from app.engine.fakers import FakeGenerator
+from app.engine.fakers import FakeGenerator, normalize_value
 from app.engine.readers import Sheet
 
 # config shape: {sheet_name: {column_name: redaction_type | "drop"}}
@@ -16,16 +16,26 @@ Mapping = dict[str, dict[str, dict[str, str]]]
 
 
 def _real_values(sheets: list[Sheet], config: Config) -> set[str]:
-    """Every real value in every column being redacted. No fake may equal
-    one of these, or the output still contains real data."""
+    """Every real value the user asked to be rid of — replaced or removed —
+    normalized.
+
+    Normalized because "  Mary  " and "Mary" are the same person's name to
+    everyone except an exact string comparison: without this, a padded
+    entry leaves the plain spelling free for the generator to hand to
+    somebody else, and a real name lands in the redacted file.
+
+    Dropped columns count too. Their values are real data the user chose to
+    delete, so handing one back as another row's fake puts it right back in
+    the file.
+    """
     values: set[str] = set()
     for sheet in sheets:
         for column, action in config.get(sheet.name, {}).items():
-            if action == "drop" or column not in sheet.headers:
+            if column not in sheet.headers:
                 continue
             index = sheet.headers.index(column)
             for row in sheet.rows:
-                cell = row[index]
+                cell = normalize_value(row[index])
                 if cell:
                     values.add(cell)
     return values
