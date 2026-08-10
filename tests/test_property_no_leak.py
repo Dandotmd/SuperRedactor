@@ -64,6 +64,69 @@ def _random_sheet(rng: random.Random, name: str) -> tuple[Sheet, dict[str, str]]
     return Sheet(name=name, headers=headers, rows=rows), config
 
 
+def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row():
+    """Heading cells are never redacted, so a record mistaken for the
+    headings ships in the clear. Generated across the column shapes real
+    exports open with — ids, money, dates, codes, names — because each
+    time this broke it was a shape nobody had tried."""
+    from app.engine.readers import read_file
+    from app.engine.writers import write_csv
+
+    rng = random.Random(602214)
+    first_column = [
+        lambda i: f"{1000 + i}",              # 4-digit id
+        lambda i: f"${1000 + i}",             # money
+        lambda i: f"{10 + i}.50",             # decimal
+        lambda i: f"{2000 + i}",              # id that looks like a year
+        lambda i: f"H0AK{i:05d}",             # record code
+        lambda i: FAKER.ssn(),
+        lambda i: FAKER.email(),
+        lambda i: f"2024-03-{(i % 28) + 1:02d}",
+    ]
+    # A file of nothing but prose has no decidable signal at all — see
+    # test_an_all_text_headerless_file_is_a_known_limitation.
+    for case, make_first in enumerate(first_column):
+        for width in (2, 4, 6):
+            rows = [
+                [make_first(i)]
+                + [FAKER.name(), "Ms. Smith", f"Grade {i % 6}", "Approved", "x"][
+                    : width - 1
+                ]
+                for i in range(6)
+            ]
+            sheet = Sheet(name="S", headers=[f"c{i}" for i in range(width)], rows=rows)
+            data = write_csv(sheet).decode().split("\n", 1)[1].encode()
+
+            parsed = read_file("roster.csv", data)[0]
+            assert len(parsed.rows) == 6, (
+                f"case {case} width {width}: record one became the heading "
+                f"{parsed.headers}"
+            )
+            _ = rng
+
+
+def test_an_all_text_headerless_file_is_a_known_limitation():
+    """Named so nobody has to rediscover it.
+
+    "Ada Lovelace,Ms. Smith" as a first record is indistinguishable from
+    "Full Name,Teacher" as a heading — same words, same shape, no numbers
+    or addresses to give it away. The tool reads it as a heading, so that
+    record is not replaced. Anything with an id, a date, an email, an
+    amount or a code anywhere in the row is decidable and is covered by
+    the property test above; this is documented in the README's Limits.
+    """
+    from app.engine.readers import read_file
+
+    data = (
+        b"Ada Lovelace,Ms. Smith\n"
+        b"Alan Turing,Mr. Jones\n"
+        b"Grace Hopper,Ms. Smith\n"
+    )
+    sheet = read_file("roster.csv", data)[0]
+    assert sheet.headers == ["Ada Lovelace", "Ms. Smith"]
+    assert len(sheet.rows) == 2
+
+
 def test_no_removed_value_is_ever_handed_back_as_a_replacement():
     """A value the user deleted must never reappear as another row's fake,
     whatever type either column is. Case matters here: identifiers compare
