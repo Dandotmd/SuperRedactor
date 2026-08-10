@@ -234,6 +234,20 @@ function adoptForRedact(body) {
     state.config[sheet.name] = { ...sheet.suggestions };
   }
   state.downloaded = false;
+  // Splitting on the wrong character puts the first record in the heading
+  // row, and headings are never replaced.
+  const odd = body.sheets.find((s) => s.maybe_wrong_delimiter);
+  if (odd) {
+    const shown = { ",": "commas", "|": "vertical bars", ";": "semicolons", "\t": "tabs" }[
+      odd.maybe_wrong_delimiter
+    ];
+    showNotice(
+      `Check the column headings below. This file may really be separated by ` +
+        `${shown} — if the headings look like a row of your data rather than ` +
+        `names of columns, the first record will not be replaced. Re-save the ` +
+        `file as a normal CSV and try again.`
+    );
+  }
   $("dropzone").hidden = true;
   $("workspace").hidden = false;
   $("redact-next").hidden = true;

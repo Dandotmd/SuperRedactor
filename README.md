@@ -45,9 +45,14 @@ amount of code:
 - **Small, auditable dependency list**: FastAPI, uvicorn, python-multipart,
   openpyxl, Faker. The engine (`app/engine/`) is pure Python with no web
   dependencies.
-- **Formula injection is neutralized.** Cells starting with `=`, `+`, `-` or
-  `@` can execute when a CSV is opened in Excel. Clean up detects them and
-  makes them safe as text.
+- **Formula injection is neutralized.** A cell can execute when a
+  spreadsheet opens it — `=cmd|'/c calc'!A1` is the classic payload. Every
+  download makes those inert, in CSV and Excel alike. The test is for the
+  syntax that actually runs something (a function call, a DDE pipe, a cell
+  reference), not for any cell that happens to start with punctuation, so
+  ordinary values like `+44 20 7946 0000` and `-$40.00` are left alone.
+  Arithmetic such as `-2+3` still evaluates on open; it displays wrongly
+  but cannot run anything.
 - **The key file is the risk.** `mapping.json` is the only path from fake
   values back to real ones. Treat it exactly like the source data: keep it on
   your machine, never attach it to the file you're sharing.
@@ -238,6 +243,13 @@ usually a sign the key is from a different run.
 - Each run generates a fresh key file; there is no cross-file or cross-run
   consistency.
 - Standardize works one sheet at a time (pick the sheet with the tabs).
+- Because different spellings of one value share a replacement, restoring
+  returns one spelling for all of them: `Mary Smith`, `MARY SMITH` and
+  `  mary  smith ` come back as whichever the key file recorded.
+- A file separated by vertical bars, semicolons or tabs *and* containing
+  those characters inside its values can be split the wrong way. The app
+  says so when it detects it — check that the column headings look like
+  names of columns, not like one of your records.
 - **The heading row is never replaced**, because headings are column names,
   not data. Files with no heading row are detected (their columns get named
   `column_1`, `column_2`…) whenever any column holds numbers, dates, emails,

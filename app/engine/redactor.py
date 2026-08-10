@@ -57,10 +57,18 @@ def _real_values(sheets: list[Sheet], config: Config) -> set[str]:
 
 
 def _forbidden_forms(cell: str) -> set[str]:
-    return {form for form in (
-        normalize_value(cell),
-        normalize_value(cell, "format_preserving"),
-    ) if form}
+    """Every spelling a generator might look this value up under.
+
+    A case-sensitive generator compares the exact text, so a lowercase
+    real value needs its uppercase twin blocked too — otherwise the
+    identifier generator can emit 'V' while 'v' sits in the file.
+    """
+    collapsed = " ".join(cell.split())
+    return {
+        form
+        for form in (collapsed, collapsed.lower(), collapsed.upper())
+        if form
+    }
 
 
 def redact(

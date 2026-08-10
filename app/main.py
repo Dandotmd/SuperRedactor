@@ -23,7 +23,7 @@ from app.engine.deredact import deredact_with_count
 from app.engine.detect import suggest_type
 from app.engine.fakers import REDACTION_TYPES
 from app.engine.leakcheck import find_leaks
-from app.engine.readers import read_file
+from app.engine.readers import mixed_delimiter_headings, read_file
 from app.engine.redactor import redact
 from app.engine.standardize import (
     apply_template,
@@ -113,7 +113,12 @@ def _new_session(filename: str, sheets: list, original: bytes | None = None) -> 
     Used both by upload and by the 'continue with this result' handoffs."""
     session_id = uuid.uuid4().hex
     while len(_sessions) >= MAX_SESSIONS:
-        _sessions.pop(next(iter(_sessions)))
+        evicted, _ = _sessions.popitem(last=False)
+        cached = _last_run.get("entry")
+        if cached is not None and cached[0][0] == evicted:
+            # Otherwise a whole redacted workbook outlives the bound that
+            # MAX_SESSIONS exists to enforce.
+            _last_run.pop("entry", None)
     _sessions[session_id] = {
         "filename": filename,
         "sheets": sheets,
@@ -132,6 +137,7 @@ def _new_session(filename: str, sheets: list, original: bytes | None = None) -> 
                 "suggestions": {
                     h: t for h in s.headers if (t := suggest_type(h)) is not None
                 },
+                "maybe_wrong_delimiter": mixed_delimiter_headings(s),
             }
             for s in sheets
         ],
@@ -218,13 +224,16 @@ _last_run: dict = {}
 
 def _redact_once(session_id: str, session: dict, config: dict):
     key = (session_id, json.dumps(config, sort_keys=True))
-    if _last_run.get("key") == key:
-        return _last_run["result"]
+    # Read the pair in one operation. Endpoints are sync, so FastAPI runs
+    # them on a threadpool: a check-then-get can have another request
+    # replace the entry in between and hand back someone else's file.
+    cached = _last_run.get("entry")
+    if cached is not None and cached[0] == key:
+        return cached[1]
     result = redact(
         session["sheets"], config, report=True, seed=_run_seed(session_id, config)
     )
-    _last_run.clear()
-    _last_run.update(key=key, result=result)
+    _last_run["entry"] = (key, result)
     return result
 
 

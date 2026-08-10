@@ -19,6 +19,8 @@ class Sheet:
     name: str
     headers: list[str]
     rows: list[list[str]] = field(default_factory=list)
+    # Which character the file was split on, so a wrong guess can be spotted
+    delimiter: str = ""
 
 
 def read_file(filename: str, data: bytes) -> list[Sheet]:
@@ -153,16 +155,38 @@ def _sniff_delimiter(text: str) -> str:
 
     if not scores:
         return ","
-    best = max(scores, key=lambda d: scores[d])
-    comma = scores.get(",")
-    if best != "," and comma and comma[0] >= scores[best][0]:
-        # A comma file can hold pipes or semicolons inside one field, which
-        # splits just as evenly and looks "wider". Only prefer the other
-        # separator when it finds substantially more structure, or the
-        # first record ends up mashed into the heading row.
-        if scores[best][1] < comma[1] * 2:
-            return ","
-    return best
+    # Most consistent wins; ties go to whichever finds more structure.
+    #
+    # "comma=2, pipe=3" is genuinely ambiguous — it fits a pipe file whose
+    # names read "LAST, FIRST" and a comma file with pipes inside one
+    # field. Federal exports are full of the former, so it wins here, and
+    # `mixed_delimiter_headings` flags the file either way when the guess
+    # looks wrong.
+    return max(scores, key=lambda d: scores[d])
+
+
+def mixed_delimiter_headings(sheet: Sheet) -> str | None:
+    """The separator that may really structure this sheet, if the headings
+    suggest it was split on the wrong character.
+
+    "comma=2, pipe=3" fits both a pipe file whose names read "LAST, FIRST"
+    and a comma file with pipes inside one field, and nothing in the text
+    settles it. Guessing wrong pushes the first record into the heading
+    row, where redaction never reaches, so the guess is shown rather than
+    trusted silently.
+    """
+    if not sheet.rows or not sheet.delimiter:
+        return None
+    sample = sheet.rows[:20]
+    for character in ",|;\t":
+        if character == sheet.delimiter:
+            continue
+        if not any(character in h for h in sheet.headers):
+            continue
+        appearances = sum(1 for row in sample for cell in row if character in cell)
+        if appearances >= len(sample):
+            return character
+    return None
 
 
 # Getting this wrong in the "it's a header" direction is dangerous: the
@@ -242,7 +266,8 @@ def _read_csv(data: bytes) -> Sheet:
             "a download failed or a login page was saved by mistake — try "
             "downloading the file again."
         )
-    reader = csv.reader(io.StringIO(text), delimiter=_sniff_delimiter(text))
+    delimiter = _sniff_delimiter(text)
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
     rows = [row for row in reader if row]
     if rows and _has_header(rows[0]):
         headers, body = rows[0], rows[1:]
@@ -251,12 +276,18 @@ def _read_csv(data: bytes) -> Sheet:
         body = rows
     body = [[_cell(v) for v in row] for row in body]
     headers, body = _normalize(headers, body)
-    return Sheet(name="Sheet1", headers=headers, rows=body)
+    return Sheet(name="Sheet1", headers=headers, rows=body, delimiter=delimiter)
 
 
 def _read_xlsx(data: bytes) -> list[Sheet]:
     try:
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        # read_only defers the real parsing to iter_rows, so pulling the
+        # rows here is what actually surfaces a damaged workbook.
+        parsed = [
+            (ws.title, [[_cell(v) for v in row] for row in ws.iter_rows(values_only=True)])
+            for ws in wb.worksheets
+        ]
     except Exception:
         # openpyxl raises a wide variety of low-level errors (zip, XML, key)
         # for damaged or password-protected workbooks.
@@ -267,19 +298,20 @@ def _read_xlsx(data: bytes) -> list[Sheet]:
         )
     sheets = []
     header_rows: dict[str, int] = {}
-    for ws in wb.worksheets:
-        rows = [[_cell(v) for v in row] for row in ws.iter_rows(values_only=True)]
-        if rows and _has_header(rows[0]):
-            header_rows[ws.title] = 1
+    for title, rows in parsed:
+        if rows and _has_header(rows[0]) and any(c.strip() for c in rows[0]):
+            header_rows[title] = 1
             headers, body = rows[0], rows[1:]
         else:
             # A spreadsheet can be headerless too, and its first record
             # would otherwise sit in the header row, which is never redacted.
-            header_rows[ws.title] = 0
+            # An all-blank first row means uncached formulas, not a
+            # heading — treating it as one would lose that record.
+            header_rows[title] = 0
             headers = [f"column_{i + 1}" for i in range(len(rows[0]) if rows else 0)]
             body = rows
         headers, body = _normalize(headers, body)
-        sheets.append(Sheet(name=ws.title, headers=headers, rows=body))
+        sheets.append(Sheet(name=title, headers=headers, rows=body))
 
     if _contains_formulas(data):
         _fill_from_formulas(data, sheets, header_rows)

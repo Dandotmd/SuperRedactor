@@ -111,25 +111,66 @@ def test_pipe_delimited_file_whose_names_all_contain_a_comma():
     assert sheets[0].rows[0][1] == "LAMB, THOMAS"
 
 
-def test_a_comma_file_whose_field_holds_pipes_stays_comma_delimited():
-    # "more columns wins" must not hand a 2-column comma file to the pipe
-    # parser, which would mash record one into the heading row
+def test_an_ambiguous_split_is_flagged_rather_than_trusted():
+    """'comma=2, pipe=3' fits two different files and nothing in the text
+    settles it. When the headings still hold the other separator, the file
+    is flagged so the wrong guess can't pass unnoticed."""
+    from app.engine.readers import mixed_delimiter_headings
+
+    for data in (
+        b"Ada Lovelace,red|green|blue\nGrace Hopper,a|b|c\nAlan Turing,x|y|z\n",
+        b"id,tags|more|cols\n1,red|green|blue\n2,a|b|c\n",
+    ):
+        sheets = read_file("tags.csv", data)
+        assert mixed_delimiter_headings(sheets[0]) == ",", data
+
+
+def test_a_confidently_split_file_is_not_flagged():
+    from app.engine.readers import mixed_delimiter_headings
+
+    for data in (
+        b"H0AK00105|LAMB, THOMAS|AK\nH0AK00113|YOUNG, D|AK\nH0AL01055|CARL, J|AL\n",
+        b"name,email\nAda,ada@x.org\nBo,bo@x.org\nCy,cy@x.org\n",
+        b"name\temail\nAda\tada@x.org\nBo\tbo@x.org\n",
+    ):
+        sheets = read_file("x.csv", data)
+        assert mixed_delimiter_headings(sheets[0]) is None, data
+
+
+def test_narrow_pipe_file_with_commas_in_names():
+    # Three columns, one comma per row from "LAST, FIRST" — the shape that
+    # a "must be twice as wide" rule handed to the comma parser
     data = (
-        b"Ada Lovelace,red|green|blue\n"
-        b"Grace Hopper,a|b|c\n"
-        b"Alan Turing,x|y|z\n"
+        b"H0AK00105|LAMB, THOMAS|AK\n"
+        b"H0AK00113|YOUNG, DONALD E|AK\n"
+        b"H0AL01055|CARL, JERRY LEE JR|AL\n"
+        b"H0AL01063|CASTORANI, JOHN|AL\n"
     )
-    sheets = read_file("tags.csv", data)
-    assert len(sheets[0].headers) == 2, sheets[0].headers
-    # The name must stay a whole cell, not be split across the pipe
-    assert "Ada Lovelace" in sheets[0].headers
-    assert all("," not in h for h in sheets[0].headers)
+    sheets = read_file("roster.txt", data)
+    assert len(sheets[0].headers) == 3, sheets[0].headers
+    assert len(sheets[0].rows) == 4
+    assert sheets[0].rows[0][1] == "LAMB, THOMAS"
 
 
-def test_a_header_row_with_pipes_in_one_field_stays_comma_delimited():
-    data = b"id,tags|more|cols\n1,red|green|blue\n2,a|b|c\n"
+def test_five_column_pipe_file_with_two_commas_per_row():
+    data = (
+        b"1001|SMITH, JOHN|111-22-3333|Boston, MA|02101\n"
+        b"1002|DOE, JANE|222-33-4444|Austin, TX|73301\n"
+        b"1003|ROE, RICH|333-44-5555|Denver, CO|80014\n"
+    )
+    sheets = read_file("roster.csv", data)
+    assert len(sheets[0].headers) == 5, sheets[0].headers
+    assert len(sheets[0].rows) == 3
+
+
+def test_semicolon_file_with_commas_in_fields():
+    data = (
+        b"1001;SMITH, JOHN;Boston\n"
+        b"1002;DOE, JANE;Austin\n"
+        b"1003;ROE, RICH;Denver\n"
+    )
     sheets = read_file("x.csv", data)
-    assert sheets[0].headers == ["id", "tags|more|cols"]
+    assert len(sheets[0].headers) == 3, sheets[0].headers
 
 
 def test_plain_comma_file_is_still_comma_delimited():
