@@ -118,16 +118,10 @@ def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row():
             _ = rng
 
 
-def test_an_all_text_headerless_file_is_a_known_limitation():
-    """Named so nobody has to rediscover it.
-
-    "Ada Lovelace,Ms. Smith" as a first record is indistinguishable from
-    "Full Name,Teacher" as a heading — same words, same shape, no numbers
-    or addresses to give it away. The tool reads it as a heading, so that
-    record is not replaced. Anything with an id, a date, an email, an
-    amount or a code anywhere in the row is decidable and is covered by
-    the property test above; this is documented in the README's Limits.
-    """
+def test_an_all_text_headerless_file_keeps_its_first_record():
+    """Nothing here is a number, a date or a label word — the row is
+    recognised as a record because it is built exactly like the rows
+    beneath it."""
     from app.engine.readers import read_file
 
     data = (
@@ -136,8 +130,28 @@ def test_an_all_text_headerless_file_is_a_known_limitation():
         b"Grace Hopper,Ms. Smith\n"
     )
     sheet = read_file("roster.csv", data)[0]
-    assert sheet.headers == ["Ada Lovelace", "Ms. Smith"]
-    assert len(sheet.rows) == 2
+    assert sheet.headers[0].startswith("column_")
+    assert len(sheet.rows) == 3
+
+
+def test_an_all_text_heading_row_with_no_label_words_is_the_known_tradeoff():
+    """Named so nobody has to rediscover the trade.
+
+    "Pupil,Tutor" over "Ada,Bob" is built exactly like its data and uses
+    no word the tool recognises as a label, so it is read as a record.
+    That costs the column names and redacts a heading — the safe
+    direction. Erring the other way would put a real person in the
+    heading row, where redaction never reaches. Adding a recognised label
+    word ("Student,Teacher") or any numeric column resolves it.
+    """
+    from app.engine.readers import read_file
+
+    sheet = read_file("x.csv", b"Pupil,Tutor\nAda,Bob\nCy,Di\nEve,Fay\n")[0]
+    assert sheet.headers[0].startswith("column_")
+    assert len(sheet.rows) == 4
+
+    labelled = read_file("y.csv", b"Student,Teacher\nAda,Bob\nCy,Di\nEve,Fay\n")[0]
+    assert labelled.headers == ["Student", "Teacher"]
 
 
 def test_no_removed_value_is_ever_handed_back_as_a_replacement():

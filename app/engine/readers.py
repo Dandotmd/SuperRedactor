@@ -262,10 +262,66 @@ def _numberish(cell: str) -> bool:
 
 
 _DIGIT_RUN = re.compile(r"\d+")
-_LETTER_RUN = re.compile(r"[A-Za-z]+")
+# Any script's letters, not just A-Z: a Cyrillic or CJK column otherwise
+# compares as punctuation and its first record gets read as a heading.
+_LETTER_RUN = re.compile(r"[^\W\d_]+", re.UNICODE)
+_NUMERIC_CLASS = re.compile(r"^[^A-Za-z]*\d[\d\s,.$€£¥%()+-]*$")
+
 # Values that mean "nothing here" — neither a heading nor a record, so they
 # should not vote either way.
-_NO_VOTE = {"", "-", "--", "n/a", "na", "null", "none", "nan", "pending", "tbd"}
+_NO_VOTE = {
+    "", "-", "--", "n/a", "na", "null", "none", "nan", "pending", "tbd",
+    "unknown", "withheld", "redacted", "exempt", "n.a.", "not collected",
+}
+
+# Words that name a column and are almost never a person's data. One is
+# enough to settle the row, which is what a reader does at a glance: seeing
+# "Name" tells you the row labels the columns, however the other cells look.
+_HEADING_WORDS = {
+    "name", "names", "id", "ids", "identifier", "code", "codes", "number",
+    "no", "num", "date", "dates", "time", "year", "month", "day", "email",
+    "mail", "phone", "tel", "mobile", "cell", "fax", "address", "street",
+    "city", "town", "state", "province", "county", "country", "region",
+    "zip", "zipcode", "postcode", "amount", "total", "subtotal", "count",
+    "sum", "score", "grade", "rank", "rate", "price", "cost", "value",
+    "notes", "note", "comment", "comments", "description", "desc", "title",
+    "type", "category", "status", "gender", "sex", "age", "dob", "ssn",
+    "first", "last", "middle", "surname", "initials", "salary", "wage",
+    "department", "dept", "division", "unit", "school", "district",
+    "student", "patient", "client", "employee", "staff", "member", "row",
+    "item", "product", "quantity", "qty", "unitprice", "term", "semester",
+    "program", "course", "section", "teacher", "provider", "diagnosis",
+}
+
+
+# Words that can stand beside a heading word without changing what the
+# cell is: "Emergency Contact Name", "Date of Birth".
+_HEADING_QUALIFIERS = {
+    "of", "the", "and", "or", "per", "by", "at", "in", "on", "for",
+    "emergency", "primary", "secondary", "home", "work", "mailing",
+    "billing", "current", "previous", "former", "full", "short", "legal",
+    "preferred", "birth", "start", "end", "due", "paid", "billed", "net",
+    "gross", "guardian", "parent", "contact", "next", "kin", "line",
+}
+
+
+def _names_a_column(cell: str) -> bool:
+    """Whether this cell reads as a label rather than a value.
+
+    The whole cell has to be made of labelling words: 'Client Name' does,
+    'ada@school.edu' does not, even though it contains 'school'.
+    """
+    text = cell.strip()
+    # A label doesn't carry a number: "Grade" names a column, "Grade 5" is
+    # somebody's grade.
+    if not text or "@" in text or len(text) > 40 or _DIGIT_RUN.search(text):
+        return False
+    tokens = [t for t in _LETTER_RUN.findall(text.lower()) if t]
+    if not tokens or len(tokens) > 4:
+        return False
+    return bool(set(tokens) & _HEADING_WORDS) and set(tokens) <= (
+        _HEADING_WORDS | _HEADING_QUALIFIERS
+    )
 
 
 def _skeleton(value: str) -> str:
@@ -294,6 +350,10 @@ def _has_header(first_row: list[str], body: list[list[str]] | None = None) -> bo
     filled = [c.strip() for c in first_row if c.strip()]
     if not filled:
         return True
+    # A word that names a column settles it outright — "Name" over "Ada"
+    # is what a reader actually goes on, and no shape comparison can see it.
+    if any(_names_a_column(cell) for cell in filled):
+        return True
     if not body:
         # One row on its own: a record if it says so, otherwise assume an
         # export that produced headings and no rows, which is far more
@@ -315,16 +375,25 @@ def _has_header(first_row: list[str], body: list[list[str]] | None = None) -> bo
         if not column:
             continue
 
-        if not _DIGIT_RUN.search(text):
-            # A word over a column of numbers, dates or codes names it.
-            if all(_DIGIT_RUN.search(v) for v in column):
+        # A column of numbers is the clearest signal there is, and it holds
+        # even when the numbers are different lengths — "7" belongs above
+        # 1234 as surely as 1001 does.
+        if all(_NUMERIC_CLASS.match(v) for v in column):
+            if _NUMERIC_CLASS.match(text):
+                data_evidence += 1
+            else:
                 heading_evidence += 1
             continue
-        shapes = [_skeleton(v) for v in column]
-        common = max(set(shapes), key=shapes.count)
-        if _skeleton(text) == common:
+
+        shapes = {_skeleton(v) for v in column}
+        if len(shapes) != 1:
+            # A column whose own values disagree about their shape says
+            # nothing about the row above it — and picking a "most common"
+            # shape made the answer depend on the hash seed.
+            continue
+        if _skeleton(text) in shapes:
             data_evidence += 1
-        else:
+        elif not _DIGIT_RUN.search(text):
             heading_evidence += 1
 
     if data_evidence and data_evidence >= heading_evidence:
