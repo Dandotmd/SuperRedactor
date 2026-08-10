@@ -56,6 +56,19 @@ amount of code:
 
 Requires Python 3.10 or newer. No admin rights needed.
 
+**If you'd rather not use a terminal:** download the project (green *Code*
+button → *Download ZIP*), unzip it, and double-click
+
+- **`Start SuperRedactor (Mac).command`** on a Mac, or
+- **`Start SuperRedactor (Windows).bat`** on Windows.
+
+It sets itself up the first time — a minute or so — then opens your browser.
+Leave that black window open while you use the app, and close it when you're
+done. On a Mac, the first double-click may need *right-click → Open* to get
+past Gatekeeper.
+
+**From a terminal:**
+
 ```bash
 git clone https://github.com/Dandotmd/SuperRedactor.git
 cd SuperRedactor
@@ -65,8 +78,9 @@ pip install -e .
 superredactor
 ```
 
-Your browser opens at `http://127.0.0.1:8321`. Stop it with `Ctrl+C` in the
-terminal; everything it held in memory is gone.
+Either way your browser opens at `http://127.0.0.1:8321` (the next free port
+if that one is busy). Stop it with `Ctrl+C`, or by closing the window;
+everything it held in memory is gone.
 
 Equivalent, without installing the command:
 

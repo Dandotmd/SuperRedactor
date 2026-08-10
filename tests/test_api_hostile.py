@@ -154,6 +154,18 @@ def test_mapping_to_a_missing_column_is_rejected():
     assert "Not A Column" in resp.json()["detail"]
 
 
+def test_run_picks_a_free_port_when_the_default_is_busy():
+    import socket
+
+    from app.main import DEFAULT_PORT, _free_port
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
+        taken.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        taken.bind(("127.0.0.1", DEFAULT_PORT))
+        taken.listen(1)
+        assert _free_port() != DEFAULT_PORT
+
+
 def test_keep_extras_naming_a_missing_column_is_rejected():
     session_id = upload("x.csv")
     template = make_template()

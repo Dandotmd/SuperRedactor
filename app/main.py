@@ -429,11 +429,46 @@ def favicon():
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+DEFAULT_PORT = 8321
+
+
+def _free_port(start: int = DEFAULT_PORT, tries: int = 10) -> int | None:
+    """First free port at or after `start`.
+
+    Double-clicking the launcher twice used to end in a bind error and a
+    stack trace, which tells someone non-technical nothing.
+    """
+    import socket
+
+    for port in range(start, start + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    return None
+
+
 def run():
     import threading
     import webbrowser
 
     import uvicorn
 
-    threading.Timer(1.0, lambda: webbrowser.open("http://127.0.0.1:8321")).start()
-    uvicorn.run(app, host="127.0.0.1", port=8321)
+    port = _free_port()
+    if port is None:
+        print(
+            "\nSuperRedactor could not start: ports 8321-8330 are all busy on this\n"
+            "computer. It is probably already running — look for it at\n"
+            "http://127.0.0.1:8321 in your browser, or restart your computer\n"
+            "and try again.\n"
+        )
+        raise SystemExit(1)
+
+    url = f"http://127.0.0.1:{port}"
+    if port != DEFAULT_PORT:
+        print(f"\nPort {DEFAULT_PORT} was busy, so SuperRedactor is using {url}\n")
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    uvicorn.run(app, host="127.0.0.1", port=port)
