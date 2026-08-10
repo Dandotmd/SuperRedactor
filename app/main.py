@@ -21,7 +21,7 @@ from app.engine.readers import read_file
 from app.engine.redactor import redact
 from app.engine.writers import write_csv, write_xlsx
 
-app = FastAPI(title="PII Redactor")
+app = FastAPI(title="SuperRedactor")
 
 STATIC_DIR = Path(__file__).parent / "static"
 PREVIEW_ROWS = 50
@@ -86,7 +86,7 @@ def do_redact(req: RedactRequest):
         out_name, out_bytes = f"{stem}.redacted.csv", write_csv(redacted[0])
 
     mapping_doc = {
-        "tool": "pii-redactor",
+        "tool": "superredactor",
         "created": datetime.datetime.now().isoformat(timespec="seconds"),
         "source_file": filename,
         "mapping": mapping,
