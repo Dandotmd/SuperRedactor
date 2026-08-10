@@ -99,7 +99,7 @@ def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row():
     # A file of nothing but prose has no decidable signal at all — see
     # test_an_all_text_headerless_file_is_a_known_limitation.
     for case, make_first in enumerate(first_column):
-        for width in (2, 4, 6):
+        for width in (2, 3, 4, 6, 9):
             rows = [
                 [make_first(i)]
                 + [FAKER.name(), "Ms. Smith", f"Grade {i % 6}", "Approved", "x"][
