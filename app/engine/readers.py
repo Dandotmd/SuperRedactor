@@ -19,8 +19,10 @@ class Sheet:
     name: str
     headers: list[str]
     rows: list[list[str]] = field(default_factory=list)
-    # Which character the file was split on, so a wrong guess can be spotted
+    # Which character the file was split on, and the runner-up if the
+    # split was a genuine toss-up, so a wrong guess can be surfaced
     delimiter: str = ""
+    rival_delimiter: str | None = None
 
 
 def read_file(filename: str, data: bytes) -> list[Sheet]:
@@ -121,7 +123,7 @@ def _decode(data: bytes) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _sniff_delimiter(text: str) -> str:
+def _sniff_delimiter(text: str) -> tuple[str, str | None]:
     """Pick the separator that splits the file most consistently.
 
     Federal data isn't always comma-separated (FEC uses "|", BLS uses
@@ -133,7 +135,7 @@ def _sniff_delimiter(text: str) -> str:
     """
     sample = "\n".join(text[:65536].splitlines()[:50])
     if not sample:
-        return ","
+        return ",", None
 
     scores: dict[str, tuple[float, int]] = {}
     for candidate in (",", "|", "\t", ";"):
@@ -154,39 +156,38 @@ def _sniff_delimiter(text: str) -> str:
         scores[candidate] = (widths.count(common) / len(widths), common)
 
     if not scores:
-        return ","
+        return ",", None
     # Most consistent wins; ties go to whichever finds more structure.
     #
     # "comma=2, pipe=3" is genuinely ambiguous — it fits a pipe file whose
     # names read "LAST, FIRST" and a comma file with pipes inside one
     # field. Federal exports are full of the former, so it wins here, and
-    # `mixed_delimiter_headings` flags the file either way when the guess
-    # looks wrong.
-    return max(scores, key=lambda d: scores[d])
+    # the runner-up is reported so the choice isn't made silently.
+    chosen = max(scores, key=lambda d: scores[d])
+    rival = next(
+        (
+            candidate
+            for candidate in sorted(scores, key=lambda d: scores[d], reverse=True)
+            if candidate != chosen and scores[candidate][0] >= scores[chosen][0]
+        ),
+        None,
+    )
+    return chosen, rival
 
 
 def mixed_delimiter_headings(sheet: Sheet) -> str | None:
-    """The separator that may really structure this sheet, if the headings
-    suggest it was split on the wrong character.
+    """The separator this sheet might really use, when the split was a
+    genuine toss-up.
 
     "comma=2, pipe=3" fits both a pipe file whose names read "LAST, FIRST"
     and a comma file with pipes inside one field, and nothing in the text
     settles it. Guessing wrong pushes the first record into the heading
-    row, where redaction never reaches, so the guess is shown rather than
-    trusted silently.
+    row, where redaction never reaches, so the toss-up is shown rather
+    than resolved silently. Reported only when a rival really scored as
+    well — a warning that fires on files that parsed perfectly is one
+    people learn to click past.
     """
-    if not sheet.rows or not sheet.delimiter:
-        return None
-    sample = sheet.rows[:20]
-    for character in ",|;\t":
-        if character == sheet.delimiter:
-            continue
-        if not any(character in h for h in sheet.headers):
-            continue
-        appearances = sum(1 for row in sample for cell in row if character in cell)
-        if appearances >= len(sample):
-            return character
-    return None
+    return sheet.rival_delimiter
 
 
 # Getting this wrong in the "it's a header" direction is dangerous: the
@@ -242,17 +243,57 @@ def _looks_like_a_value(cell: str) -> bool:
     )
 
 
-def _has_header(first_row: list[str]) -> bool:
+def _numberish(cell: str) -> bool:
+    text = cell.strip()
+    return bool(text) and any(shape.match(text) for shape in _WEAK_VALUE_SHAPES)
+
+
+def _has_header(first_row: list[str], body: list[list[str]] | None = None) -> bool:
+    """Whether the first row names the columns or is the first record.
+
+    Guessing "heading" when it is really a record is the dangerous
+    direction — heading cells are never redacted, so that person ships in
+    the clear. Beyond the shapes no one names a column after, the first
+    row is compared against the column beneath it: a heading over a column
+    of numbers is not itself a number, while a record's ID is.
+    """
     filled = [c.strip() for c in first_row if c.strip()]
     if not filled:
         return True
     if any(_looks_like_a_value(cell) for cell in filled):
         return False
+
+    heading_evidence = data_evidence = 0
+    for index, cell in enumerate(first_row):
+        column = [
+            row[index].strip()
+            for row in (body or [])[:20]
+            if index < len(row) and row[index].strip()
+        ]
+        if not column or not all(_numberish(v) for v in column):
+            continue
+        text = cell.strip()
+        if not text:
+            continue
+        if not _numberish(text):
+            heading_evidence += 1
+        elif _YEAR.match(text) and not any(
+            len(v) == len(text) for v in column
+        ):
+            # "2023" over two-digit scores names a year column; "2001"
+            # over 2002, 2003 is a record's own id.
+            heading_evidence += 1
+        else:
+            data_evidence += 1
+
+    if data_evidence and not heading_evidence:
+        return False
+    if heading_evidence:
+        return True
     weak = sum(
         1
         for cell in filled
-        if not _YEAR.match(cell)
-        and any(shape.match(cell) for shape in _WEAK_VALUE_SHAPES)
+        if not _YEAR.match(cell) and _numberish(cell)
     )
     return weak / len(filled) < _WEAK_MAJORITY
 
@@ -266,17 +307,23 @@ def _read_csv(data: bytes) -> Sheet:
             "a download failed or a login page was saved by mistake — try "
             "downloading the file again."
         )
-    delimiter = _sniff_delimiter(text)
+    delimiter, rival = _sniff_delimiter(text)
     reader = csv.reader(io.StringIO(text), delimiter=delimiter)
     rows = [row for row in reader if row]
-    if rows and _has_header(rows[0]):
+    if rows and _has_header(rows[0], rows[1:]):
         headers, body = rows[0], rows[1:]
     else:
         headers = [f"column_{i + 1}" for i in range(len(rows[0]) if rows else 0)]
         body = rows
     body = [[_cell(v) for v in row] for row in body]
     headers, body = _normalize(headers, body)
-    return Sheet(name="Sheet1", headers=headers, rows=body, delimiter=delimiter)
+    return Sheet(
+        name="Sheet1",
+        headers=headers,
+        rows=body,
+        delimiter=delimiter,
+        rival_delimiter=rival,
+    )
 
 
 def _read_xlsx(data: bytes) -> list[Sheet]:
@@ -299,7 +346,7 @@ def _read_xlsx(data: bytes) -> list[Sheet]:
     sheets = []
     header_rows: dict[str, int] = {}
     for title, rows in parsed:
-        if rows and _has_header(rows[0]) and any(c.strip() for c in rows[0]):
+        if rows and _has_header(rows[0], rows[1:]) and any(c.strip() for c in rows[0]):
             header_rows[title] = 1
             headers, body = rows[0], rows[1:]
         else:

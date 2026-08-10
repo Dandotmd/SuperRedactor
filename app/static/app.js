@@ -242,10 +242,10 @@ function adoptForRedact(body) {
       odd.maybe_wrong_delimiter
     ];
     showNotice(
-      `Check the column headings below. This file may really be separated by ` +
-        `${shown} — if the headings look like a row of your data rather than ` +
-        `names of columns, the first record will not be replaced. Re-save the ` +
-        `file as a normal CSV and try again.`
+      `This file could also be read as separated by ${shown}. Check that the ` +
+        `column headings below look like names of columns — if one of them ` +
+        `looks like a row of your data instead, the file was split the wrong ` +
+        `way and that record would not be replaced.`
     );
   }
   $("dropzone").hidden = true;

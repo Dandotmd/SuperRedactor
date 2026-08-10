@@ -125,16 +125,34 @@ def test_an_ambiguous_split_is_flagged_rather_than_trusted():
         assert mixed_delimiter_headings(sheets[0]) == ",", data
 
 
-def test_a_confidently_split_file_is_not_flagged():
+def test_an_unambiguous_split_is_not_flagged():
     from app.engine.readers import mixed_delimiter_headings
 
     for data in (
-        b"H0AK00105|LAMB, THOMAS|AK\nH0AK00113|YOUNG, D|AK\nH0AL01055|CARL, J|AL\n",
         b"name,email\nAda,ada@x.org\nBo,bo@x.org\nCy,cy@x.org\n",
         b"name\temail\nAda\tada@x.org\nBo\tbo@x.org\n",
+        b"a,b,c\n1,2,3\n4,5,6\n",
     ):
         sheets = read_file("x.csv", data)
         assert mixed_delimiter_headings(sheets[0]) is None, data
+
+
+def test_the_flag_survives_being_passed_to_the_next_tool():
+    """The notice is the mitigation for a wrong split, so it must not
+    disappear on the handoff the app encourages."""
+    from app.engine.cleaners import clean
+    from app.engine.readers import mixed_delimiter_headings
+    from app.engine.redactor import redact
+
+    data = b"Ada Lovelace,red|green|blue\nGrace Hopper,a|b|c\nAlan Turing,x|y|z\n"
+    sheets = read_file("tags.csv", data)
+    assert mixed_delimiter_headings(sheets[0]) == ","
+
+    cleaned, _ = clean(sheets, enabled=set())
+    assert mixed_delimiter_headings(cleaned[0]) == ","
+
+    redacted, _ = redact(sheets, {})
+    assert mixed_delimiter_headings(redacted[0]) == ","
 
 
 def test_narrow_pipe_file_with_commas_in_names():
@@ -177,6 +195,58 @@ def test_plain_comma_file_is_still_comma_delimited():
     data = b"name,email\nAda,ada@x.org\nGrace,grace@x.org\n"
     sheets = read_file("x.csv", data)
     assert sheets[0].headers == ["name", "email"]
+
+
+# ---- headerless files whose first column is numeric ------------------------
+
+HEADERLESS_NUMERIC = [
+    b"1001,Ada Lovelace,Ms. Smith,Grade 5\n"
+    b"1002,Alan Turing,Mr. Jones,Grade 4\n"
+    b"1003,Grace Hopper,Ms. Smith,Grade 6\n",
+    b"$1234,Ada Lovelace,Diabetes,Approved\n"
+    b"$2345,Alan Turing,Asthma,Approved\n"
+    b"$3456,Grace Hopper,Diabetes,Denied\n",
+    b"12.50,Ada Lovelace,Diabetes,Approved\n"
+    b"13.75,Alan Turing,Asthma,Approved\n"
+    b"14.20,Grace Hopper,Diabetes,Denied\n",
+    b"2001,Ada Lovelace,Ms. Smith,Grade 5\n"
+    b"2002,Alan Turing,Mr. Jones,Grade 4\n"
+    b"2003,Grace Hopper,Ms. Smith,Grade 6\n",
+]
+
+
+def test_a_numeric_first_column_does_not_make_record_one_a_heading():
+    for data in HEADERLESS_NUMERIC:
+        sheets = read_file("roster.csv", data)
+        assert sheets[0].headers[0].startswith("column_"), sheets[0].headers
+        assert len(sheets[0].rows) == 3, data
+        assert "Ada Lovelace" not in sheets[0].headers
+
+
+def test_the_same_shape_in_xlsx():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "S"
+    for i, name in enumerate(["Ada Lovelace", "Alan Turing", "Grace Hopper"]):
+        ws.append([1001 + i, name, "Ms. Smith", "Grade 5"])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    sheets = read_file("roster.xlsx", buf.getvalue())
+    assert sheets[0].headers[0].startswith("column_")
+    assert len(sheets[0].rows) == 3
+
+
+def test_year_named_columns_are_still_headings():
+    data = b"Name,2023,2024\nAda,88,91\nBo,75,80\nCy,95,99\n"
+    sheets = read_file("years.csv", data)
+    assert sheets[0].headers == ["Name", "2023", "2024"]
+
+
+def test_ordinary_headings_over_numeric_columns_are_still_headings():
+    data = b"Name,Score,Rank\nAda,88,1\nBo,75,2\nCy,95,3\n"
+    sheets = read_file("x.csv", data)
+    assert sheets[0].headers == ["Name", "Score", "Rank"]
 
 
 # ---- N2: headerless xlsx --------------------------------------------------

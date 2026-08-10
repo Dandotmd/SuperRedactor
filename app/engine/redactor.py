@@ -146,7 +146,15 @@ def redact(
                 else:
                     new_row.append(cell)
             rows.append(new_row)
-        out.append(Sheet(name=sheet.name, headers=headers, rows=rows))
+        out.append(
+            Sheet(
+                name=sheet.name,
+                headers=headers,
+                rows=rows,
+                delimiter=sheet.delimiter,
+                rival_delimiter=sheet.rival_delimiter,
+            )
+        )
 
     if not report:
         return out, mapping

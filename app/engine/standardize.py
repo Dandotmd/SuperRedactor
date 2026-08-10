@@ -319,7 +319,13 @@ def apply_template(
         )
 
     return StandardizeResult(
-        sheet=Sheet(name=sheet.name, headers=out_headers, rows=rows),
+        sheet=Sheet(
+            name=sheet.name,
+            headers=out_headers,
+            rows=rows,
+            delimiter=sheet.delimiter,
+            rival_delimiter=sheet.rival_delimiter,
+        ),
         warnings=warnings,
         unmatched=unmatched,
     )

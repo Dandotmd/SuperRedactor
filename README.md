@@ -177,9 +177,10 @@ Where that becomes impossible — a 400-name roster is larger than the
 generator's own list of first names — the tool says so before you download,
 naming the column. It never reuses a real value silently.
 
-The same file with the same choices always produces the same fake values, so
-downloading twice gives you an interchangeable pair. Change a column and you
-get a different pair.
+Within one loaded file, the same choices always produce the same fake
+values, so downloading twice gives you an interchangeable pair. Change a
+column, or load the file again, and you get a different set — pair each
+redacted file with the key that came out of the ZIP alongside it.
 
 ### Clean up a file
 
@@ -191,9 +192,12 @@ rows and columns, exact duplicates, stray and non-breaking whitespace,
 that would run as Excel formulas.
 
 Untick anything you disagree with — the preview updates live — then download.
-Detection is deliberately conservative: sheets with fewer than three populated
-columns are left alone rather than guessed at, and ambiguous dates are read as
-US month/day (the fix card says so, so you can untick it).
+Detection is deliberately conservative where a wrong guess would cost you
+data: a heading row is only looked for on sheets at least three columns
+wide, a trailing row is only removed when it announces itself ("Total",
+"Source:"), and ambiguous dates are read as US month/day — the fix card
+says so, so you can untick it. Fixes that only tidy values (blank rows,
+duplicates, whitespace) apply to any sheet.
 
 ### Standardize
 
@@ -246,10 +250,12 @@ usually a sign the key is from a different run.
 - Because different spellings of one value share a replacement, restoring
   returns one spelling for all of them: `Mary Smith`, `MARY SMITH` and
   `  mary  smith ` come back as whichever the key file recorded.
-- A file separated by vertical bars, semicolons or tabs *and* containing
-  those characters inside its values can be split the wrong way. The app
-  says so when it detects it — check that the column headings look like
-  names of columns, not like one of your records.
+- When a file could be read as separated by more than one character —
+  vertical bars, semicolons, tabs or commas that also appear inside the
+  values — the split is a genuine toss-up and can go the wrong way. The app
+  says when a file is in that position; check that the column headings look
+  like names of columns, not like one of your records. It says so whenever
+  the file is ambiguous, including when the guess was right.
 - **The heading row is never replaced**, because headings are column names,
   not data. Files with no heading row are detected (their columns get named
   `column_1`, `column_2`…) whenever any column holds numbers, dates, emails,

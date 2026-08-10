@@ -115,7 +115,15 @@ def clean(
         # --- last: column removal (shifts indexes, so nothing follows) ---
         run("blank_columns", lambda: _detect_blank_columns(headers, rows))
 
-        out.append(Sheet(name=sheet.name, headers=headers, rows=rows))
+        out.append(
+            Sheet(
+                name=sheet.name,
+                headers=headers,
+                rows=rows,
+                delimiter=sheet.delimiter,
+                rival_delimiter=sheet.rival_delimiter,
+            )
+        )
     return out, findings
 
 
