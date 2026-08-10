@@ -28,3 +28,7 @@ packages = ["app", "app.engine"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # starlette-internal deprecation about its own httpx test dependency
+    "ignore:Using `httpx` with `starlette.testclient`",
+]
