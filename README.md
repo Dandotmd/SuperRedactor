@@ -244,12 +244,18 @@ usually a sign the key is from a different run.
 
 ## How it is tested
 
-157+ tests run the engine and the HTTP API, written before the code they
-cover. Beyond the happy paths they pin down the failures that matter:
+Just under 200 tests run the engine and the HTTP API, written before the
+code they cover. Beyond the happy paths they pin down the failures that
+matter:
 
+- **The core promise, as a randomized property** (`tests/test_property_no_leak.py`)
+  — across hundreds of generated files with random column types, multiple
+  sheets and drop/replace combinations: a replaced column never emits one of
+  its real values, one fake never stands for two people, and a deleted value
+  never comes back as somebody's replacement.
 - **Leak regressions** (`tests/test_leak_regressions.py`) — every confirmed
-  way a real value once reached "redacted" output, asserted as a property
-  ("no real value appears in the output") so a refactor can't reintroduce it.
+  way a real value once reached "redacted" output, including the case where
+  the roster is larger than the generator's own list of names.
 - **Hostile input** (`tests/test_hostile_input.py`, `test_api_hostile.py`) —
   Mac line endings, cells bigger than the CSV field limit, UTF-16, formula
   injection, filenames with smart punctuation or `../`, damaged workbooks.
