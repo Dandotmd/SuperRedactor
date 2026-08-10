@@ -27,6 +27,10 @@ _DECORATED_NUMBER = re.compile(r"^\(?\$?\s?-?[\d,]+(\.\d+)?\)?%?$")
 # Emptying them would destroy data the user never agreed to lose.
 _MISSING_MARKERS = {"n/a", "null", "nan", "#n/a", "#null!", "--"}
 
+# Making a formula-like cell inert is not a matter of taste — every writer
+# does it on every download, so it is reported rather than offered.
+ALWAYS_APPLIED = {"formula_injection"}
+
 _DATE_FORMATS = (
     "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%m-%d-%Y",
     "%d %b %Y", "%d %B %Y", "%b %d, %Y", "%B %d, %Y", "%d-%b-%Y",
@@ -42,6 +46,10 @@ class Finding:
     count: int
     description: str
     samples: list[list[str]] = field(default_factory=list)
+    # Shown for information but not optional: the writers apply it to every
+    # download anyway, so offering a checkbox would make the preview
+    # disagree with the file.
+    always: bool = False
 
 
 def analyze(sheets: list[Sheet]) -> list[Finding]:
@@ -74,10 +82,11 @@ def clean(
             count, description, samples, fixer = found
             fid = f"{kind}:{_s}" + (f":{column}" if column is not None else "")
             column_name = headers[column] if column is not None else None
+            always = kind in ALWAYS_APPLIED
             findings.append(
-                Finding(fid, kind, _s, column_name, count, description, samples)
+                Finding(fid, kind, _s, column_name, count, description, samples, always)
             )
-            if enabled is None or fid in enabled:
+            if always or enabled is None or fid in enabled:
                 fixer()
 
         # --- structural, row-level (column indexes stay stable) ---
@@ -389,8 +398,9 @@ def _detect_formula_injection(rows: list[list[str]]):
 
     return (
         len(risky),
-        f"{len(risky)} cell(s) start with =, +, - or @ and would run as "
-        f"formulas when opened in Excel (made safe as text)",
+        f"{len(risky)} cell(s) start with =, +, - or @ and would run as a "
+        f"formula when opened in Excel. Always saved as plain text — this one "
+        f"is not optional.",
         samples,
         fix,
     )

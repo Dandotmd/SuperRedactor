@@ -143,6 +143,8 @@ td.is-dropped, th.is-dropped .col-name { opacity: 0.35; text-decoration: line-th
 }
 .finding-samples .arrow { color: var(--stamp); }
 .finding.is-off { opacity: 0.55; }
+.finding.is-always { border-left: 4px solid #2c5aa0; }
+.finding .lock { font-size: 0.85rem; line-height: 1.4; }
 .all-clear {
   border-left: 4px solid #2c7a3f; background: #edf6ef; border-radius: 0 4px 4px 0;
   padding: 0.6rem 0.9rem; font-size: 0.9rem;

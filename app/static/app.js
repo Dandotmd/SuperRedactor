@@ -464,7 +464,9 @@ async function adoptForClean(body) {
   cleanState.filename = body.filename;
   const data = await api("/api/clean/analyze", { session_id: body.session_id });
   cleanState.findings = data.findings;
-  cleanState.enabled = new Set(data.findings.map((f) => f.id));
+  cleanState.enabled = new Set(
+    data.findings.filter((f) => !f.always).map((f) => f.id)
+  );
   cleanState.activeSheet = 0;
   $("clean-dropzone").hidden = true;
   $("clean-workspace").hidden = false;
@@ -506,20 +508,30 @@ function renderFindings() {
   const multiSheet = new Set(cleanState.findings.map((f) => f.sheet)).size > 1;
   for (const finding of cleanState.findings) {
     const label = document.createElement("label");
-    label.className = "finding" + (cleanState.enabled.has(finding.id) ? "" : " is-off");
+    label.className =
+      "finding" +
+      (finding.always ? " is-always" : cleanState.enabled.has(finding.id) ? "" : " is-off");
 
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = cleanState.enabled.has(finding.id);
-    box.addEventListener(
-      "change",
-      guard("Updating preview…", async () => {
-        if (box.checked) cleanState.enabled.add(finding.id);
-        else cleanState.enabled.delete(finding.id);
-        label.classList.toggle("is-off", !box.checked);
-        await refreshCleanPreview();
-      }, resetClean)
-    );
+    let box;
+    if (finding.always) {
+      box = document.createElement("span");
+      box.className = "lock";
+      box.textContent = "🔒";
+      box.title = "Applied to every download";
+    } else {
+      box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = cleanState.enabled.has(finding.id);
+      box.addEventListener(
+        "change",
+        guard("Updating preview…", async () => {
+          if (box.checked) cleanState.enabled.add(finding.id);
+          else cleanState.enabled.delete(finding.id);
+          label.classList.toggle("is-off", !box.checked);
+          await refreshCleanPreview();
+        }, resetClean)
+      );
+    }
 
     const bodyEl = document.createElement("div");
     bodyEl.className = "finding-body";
@@ -554,10 +566,10 @@ function renderFindings() {
 }
 
 function renderCleanSummary() {
-  const on = cleanState.enabled.size;
-  const total = cleanState.findings.length;
-  $("clean-summary").textContent = total
-    ? `${on} of ${total} fixes will be applied`
+  const optional = cleanState.findings.filter((f) => !f.always);
+  const on = optional.filter((f) => cleanState.enabled.has(f.id)).length;
+  $("clean-summary").textContent = optional.length
+    ? `${on} of ${optional.length} fixes will be applied`
     : "The download will match the file you gave us.";
 }
 

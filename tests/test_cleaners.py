@@ -210,6 +210,23 @@ def test_leading_dash_text_is_treated_as_formula_risk():
 
 # ---- selective application ------------------------------------------------
 
+def test_formula_fix_is_marked_as_always_applied():
+    sheets = [sheet(["Note"], [["=1+1"], ["ok"], ["fine"]])]
+    finding = by_kind(analyze(sheets), "formula_injection")[0]
+    assert finding.always is True
+
+
+def test_formula_fix_applies_even_when_not_selected():
+    sheets = [sheet(["Note"], [["=1+1"], ["ok"], ["fine"]])]
+    cleaned = apply_fixes(sheets, set())  # user selected nothing
+    assert cleaned[0].rows[0][0] == "'=1+1"
+
+
+def test_ordinary_fixes_are_not_marked_always():
+    sheets = [sheet(["Name"], [["  Sarah "], ["Bob"], ["Ann"]])]
+    assert by_kind(analyze(sheets), "whitespace")[0].always is False
+
+
 def test_disabled_fixes_are_not_applied():
     sheets = [
         sheet(["Name"], [["  Sarah "], ["Bob"], ["Bob"]])

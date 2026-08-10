@@ -223,17 +223,24 @@ def clean_apply(req: CleanRequest):
     session = _get_session(req.session_id)
     enabled = None if req.enabled is None else set(req.enabled)
 
+    cleaned, findings = clean(session["sheets"], enabled)
+
     filename: str = session["filename"] or "file.csv"
-    if enabled is not None and not enabled and session.get("original") is not None:
+    if (
+        enabled is not None
+        and not enabled
+        and session.get("original") is not None
+        and not any(f.always for f in findings)
+    ):
         # "No fixes selected" has to mean the file comes back untouched.
         # Rewriting it would still introduce parser artifacts like padded
-        # rows and invented headings for unnamed columns.
+        # rows and invented headings for unnamed columns. Skipped when
+        # something non-optional applies, so that stays true to its word.
         return _download(
             session["original"],
             filename,
             "application/octet-stream",
         )
-    cleaned, _ = clean(session["sheets"], enabled)
 
     stem = _safe_stem(filename)
     if filename.lower().endswith((".xlsx", ".xlsm")):

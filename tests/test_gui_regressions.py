@@ -134,6 +134,17 @@ def test_cleaning_with_no_fixes_returns_the_original_file_unchanged():
     assert resp.content == MESSY
 
 
+def test_zero_fixes_still_neutralizes_formulas():
+    # "no fixes" must not become a way to get an executable file back
+    data = b"Name,Note\nAda,=cmd|calc\nGrace,ok\nAlan,fine\n"
+    session = upload("formulas.csv", data)
+    resp = client.post(
+        "/api/clean/apply", json={"session_id": session["session_id"], "enabled": []}
+    )
+    assert resp.content != data
+    assert b"'=cmd|calc" in resp.content
+
+
 def test_cleaning_with_fixes_still_transforms():
     session = upload("messy.csv", MESSY)
     findings = client.post(
