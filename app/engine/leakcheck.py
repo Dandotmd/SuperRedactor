@@ -34,6 +34,11 @@ class Leak:
     kept_column: str
     count: int
     samples: list[str] = field(default_factory=list)
+    # True when the sentence scan stopped early, so the count is a floor
+    # rather than a total. Saying "3" when the honest answer is "at least
+    # 3" is the kind of precision that teaches people to trust a number
+    # they shouldn't.
+    partial: bool = False
 
 
 def _key(value: str) -> str:
@@ -80,6 +85,7 @@ def find_leaks(sheets, config: dict[str, dict[str, str]]) -> list[Leak]:
         for kept_column in kept:
             index = sheet.headers.index(kept_column)
             found = _scan_column(sheet, index, tracked, quotable)
+            partial = bool(quotable) and len(sheet.rows) > MAX_SUBSTRING_ROWS
             for redacted_column, (count, samples) in found.items():
                 leaks.append(
                     Leak(
@@ -88,6 +94,7 @@ def find_leaks(sheets, config: dict[str, dict[str, str]]) -> list[Leak]:
                         kept_column=kept_column,
                         count=count,
                         samples=samples,
+                        partial=partial,
                     )
                 )
     return leaks

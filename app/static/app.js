@@ -428,8 +428,8 @@ async function runRedactCheck() {
     const examples = leak.samples.map((s) => `"${s}"`).join(", ");
     p.textContent =
       `Still visible: "${leak.kept_column}" shows values from ` +
-      `"${leak.redacted_column}" ${leak.count} time${leak.count === 1 ? "" : "s"} — ` +
-      `for example ${examples}. ` +
+      `"${leak.redacted_column}" ${leak.partial ? "at least " : ""}${leak.count} ` +
+      `time${leak.count === 1 ? "" : "s"} — for example ${examples}. ` +
       `Replace or remove "${leak.kept_column}" too, or those values go out with the file.`;
     holder.appendChild(p);
   }

@@ -22,7 +22,7 @@ from app.engine.cleaners import clean
 from app.engine.deredact import deredact_with_count
 from app.engine.detect import suggest_type
 from app.engine.fakers import REDACTION_TYPES
-from app.engine.leakcheck import find_leaks, find_weak_columns
+from app.engine.leakcheck import find_leaks
 from app.engine.readers import read_file
 from app.engine.redactor import redact
 from app.engine.standardize import (
@@ -156,7 +156,7 @@ def redact_check(req: RedactRequest):
     session = _get_session(req.session_id)
     sheets = session["sheets"]
     try:
-        weak = find_weak_columns(sheets, req.config, seed=_run_seed(req.session_id, req.config))
+        _, _, weak = _redact_once(req.session_id, session, req.config)
     except ValueError as e:
         # Same validation the download applies, so a green all-clear can
         # never be followed by a failed download.
@@ -171,12 +171,7 @@ def redact_check(req: RedactRequest):
 def do_redact(req: RedactRequest):
     session = _get_session(req.session_id)
     try:
-        redacted, mapping, weak = redact(
-            session["sheets"],
-            req.config,
-            report=True,
-            seed=_run_seed(req.session_id, req.config),
-        )
+        redacted, mapping, weak = _redact_once(req.session_id, session, req.config)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     warnings = [
@@ -212,6 +207,25 @@ def do_redact(req: RedactRequest):
         f"{stem}.redacted-plus-key-DO-NOT-SHARE.zip",
         "application/zip",
     )
+
+
+# The warning shown before the download and the download itself run the
+# same redaction. Keeping the most recent one means the user pays for it
+# once instead of twice — on a 200k-row file that is half a minute. Only
+# one entry, so memory stays bounded.
+_last_run: dict = {}
+
+
+def _redact_once(session_id: str, session: dict, config: dict):
+    key = (session_id, json.dumps(config, sort_keys=True))
+    if _last_run.get("key") == key:
+        return _last_run["result"]
+    result = redact(
+        session["sheets"], config, report=True, seed=_run_seed(session_id, config)
+    )
+    _last_run.clear()
+    _last_run.update(key=key, result=result)
+    return result
 
 
 def _run_seed(session_id: str, config: dict) -> int:
