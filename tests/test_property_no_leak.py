@@ -98,15 +98,23 @@ def test_a_headerless_file_never_loses_its_first_record_to_the_heading_row():
     ]
     # A file of nothing but prose has no decidable signal at all — see
     # test_an_all_text_headerless_file_is_a_known_limitation.
+    # Shapes inside a column vary in real exports — a short id beside a
+    # long one, a blank, a text placeholder — and assuming they don't is
+    # how record one got read as a heading twice over.
+    def vary(value: str, i: int) -> str:
+        return {0: value, 1: value[:2] or value, 2: "", 3: "Unknown"}.get(i % 4, value)
+
     for case, make_first in enumerate(first_column):
         for width in (2, 3, 4, 6, 9):
             rows = [
-                [make_first(i)]
+                [vary(make_first(i), i)]
                 + [FAKER.name(), "Ms. Smith", f"Grade {i % 6}", "Approved", "x"][
                     : width - 1
                 ]
                 for i in range(6)
             ]
+            if not rows[0][0]:
+                rows[0][0] = make_first(0)
             sheet = Sheet(name="S", headers=[f"c{i}" for i in range(width)], rows=rows)
             data = write_csv(sheet).decode().split("\n", 1)[1].encode()
 
