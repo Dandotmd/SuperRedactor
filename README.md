@@ -219,6 +219,14 @@ usually a sign the key is from a different run.
 - Each run generates a fresh key file; there is no cross-file or cross-run
   consistency.
 - Standardize works one sheet at a time (pick the sheet with the tabs).
+- **The heading row is never replaced**, because headings are column names,
+  not data. Files with no heading row are detected (their columns get named
+  `column_1`, `column_2`…) whenever any column holds numbers, dates, emails,
+  IDs or phone numbers — which covers essentially every real export. A file
+  that is *entirely* free text with no heading row could have its first
+  record read as headings. If the column headings in the preview look like
+  somebody's details rather than names of columns, add a heading row to your
+  file and start again.
 
 ## How it is tested
 
