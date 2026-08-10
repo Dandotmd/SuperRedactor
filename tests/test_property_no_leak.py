@@ -64,6 +64,36 @@ def _random_sheet(rng: random.Random, name: str) -> tuple[Sheet, dict[str, str]]
     return Sheet(name=name, headers=headers, rows=rows), config
 
 
+def test_no_removed_value_is_ever_handed_back_as_a_replacement():
+    """A value the user deleted must never reappear as another row's fake,
+    whatever type either column is. Case matters here: identifiers compare
+    case-sensitively, and protecting a removed value under only one of the
+    two comparison forms let uppercase codes come straight back."""
+    from app.engine.fakers import normalize_value
+
+    rng = random.Random(31337)
+    for case in range(200):
+        removed_type = rng.choice(sorted(VALUE_MAKERS))
+        kept_type = rng.choice(sorted(VALUE_MAKERS))
+        values = [VALUE_MAKERS[removed_type](FAKER) for _ in range(rng.randint(5, 40))]
+        rows = [[VALUE_MAKERS[kept_type](FAKER), v] for v in values]
+        sheets = [Sheet(name="S", headers=["keep", "gone"], rows=rows)]
+        config = {"S": {"keep": kept_type, "gone": "drop"}}
+
+        redacted, _ = redact(sheets, config, seed=case)
+        removed = {normalize_value(v) for v in values}
+        produced = {
+            normalize_value(cell)
+            for row in redacted[0].rows
+            for cell in row
+            if cell.strip()
+        }
+        assert not (produced & removed), (
+            f"case {case} ({removed_type} removed, {kept_type} kept): "
+            f"{sorted(produced & removed)[:3]} came back"
+        )
+
+
 def test_no_real_value_survives_random_redactions():
     rng = random.Random(20260810)
     for case in range(300):

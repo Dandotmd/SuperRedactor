@@ -46,12 +46,21 @@ def _real_values(sheets: list[Sheet], config: Config) -> set[str]:
                 continue
             index = sheet.headers.index(column)
             for row in sheet.rows:
-                # Both forms, so the check works whichever type later asks
-                cell = row[index]
-                for form in (normalize_value(cell), normalize_value(cell, action)):
-                    if form:
-                        values.add(form)
+                # Stored under both comparison forms. A generator looks the
+                # value up under *its own* rule — identifiers compare with
+                # case, names without — and the column a value came from
+                # says nothing about which generator will ask. Deriving the
+                # second form from this column's action instead let an
+                # uppercase code from a removed column come straight back.
+                values.update(_forbidden_forms(row[index]))
     return values
+
+
+def _forbidden_forms(cell: str) -> set[str]:
+    return {form for form in (
+        normalize_value(cell),
+        normalize_value(cell, "format_preserving"),
+    ) if form}
 
 
 def redact(

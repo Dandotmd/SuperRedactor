@@ -427,9 +427,9 @@ async function runRedactCheck() {
     p.className = "danger-note";
     const examples = leak.samples.map((s) => `"${s}"`).join(", ");
     p.textContent =
-      `Still visible: ${leak.count} cell${leak.count === 1 ? "" : "s"} of ` +
-      `"${leak.kept_column}" contain values from "${leak.redacted_column}", ` +
-      `which you are replacing — for example ${examples}. ` +
+      `Still visible: "${leak.kept_column}" shows values from ` +
+      `"${leak.redacted_column}" ${leak.count} time${leak.count === 1 ? "" : "s"} — ` +
+      `for example ${examples}. ` +
       `Replace or remove "${leak.kept_column}" too, or those values go out with the file.`;
     holder.appendChild(p);
   }
@@ -733,10 +733,13 @@ async function loadTemplateSource(body) {
 
 async function refreshTemplateFromSheet() {
   const sheetName = stdState.makeSheets[stdState.makeActiveSheet].name;
-  stdState.template = await api("/api/standardize/template", {
+  const body = await api("/api/standardize/template", {
     session_id: stdState.makeSessionId,
     sheet: sheetName,
   });
+  // Kept apart from the template so the saved file can never carry them.
+  stdState.template = body.template;
+  stdState.candidates = body.suggested_values || {};
   renderSheetTabs(
     "std-make-sheet-tabs",
     stdState.makeSheets,
@@ -818,7 +821,7 @@ function renderTemplateColumns() {
 
     // Remembering a column's values copies real data into a file meant to
     // be shared, so it is off until asked for.
-    const candidates = stdState.template.suggested_values || {};
+    const candidates = stdState.candidates || {};
     if (col.type === "text" && candidates[col.name]) {
       const label = document.createElement("label");
       label.className = "keep-label";

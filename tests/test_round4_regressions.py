@@ -1,6 +1,7 @@
 """Regressions from the fourth review round."""
 
 import io
+import json
 
 from openpyxl import Workbook
 
@@ -57,6 +58,46 @@ def test_the_warning_shown_matches_the_file_downloaded():
         )
 
 
+# ---- a removed value must not come back, whatever the case ----------------
+
+def test_uppercase_codes_from_a_removed_column_do_not_come_back():
+    """Identifier columns compare case-sensitively, so a removed value has
+    to be protected under that comparison too — not only casefolded."""
+    # Both columns hold the same shape — one uppercase letter and a digit —
+    # so every replacement is drawn from the same 260 possibilities the
+    # removed column's values live in.
+    kept = [f"{letter}{digit}" for letter in "KLMNOPQRST" for digit in "0123456789"]
+    removed = [f"{letter}{digit}" for letter in "ABCDEFGHIJ" for digit in "0123456789"]
+    rows = [[kept[i], removed[i]] for i in range(100)]
+    sheets = [Sheet(name="S", headers=["Room Code", "Old Room Code"], rows=rows)]
+    config = {"S": {"Room Code": "format_preserving", "Old Room Code": "drop"}}
+
+    from app.engine.leakcheck import find_weak_columns
+
+    redacted, _ = redact(sheets, config, seed=5)
+    gone = set(removed)
+    produced = {c.strip() for row in redacted[0].rows for c in row if c.strip()}
+    if produced & gone:
+        # 100 values needing replacements out of 260 possible, with 200
+        # already spoken for, genuinely cannot be satisfied — but it must
+        # never happen quietly.
+        assert find_weak_columns(sheets, config, seed=5), (
+            f"{len(produced & gone)} removed codes came back with no warning"
+        )
+
+
+def test_uppercase_codes_removed_alongside_a_number_column():
+    values = [str(n) for n in range(100, 400)]
+    rows = [[str(1000 + i), values[i]] for i in range(300)]
+    sheets = [Sheet(name="S", headers=["Count", "Old Count"], rows=rows)]
+    config = {"S": {"Count": "number", "Old Count": "drop"}}
+
+    redacted, _ = redact(sheets, config, seed=6)
+    removed = set(values)
+    produced = {c.strip() for row in redacted[0].rows for c in row if c.strip()}
+    assert not (produced & removed), sorted(produced & removed)[:6]
+
+
 # ---- N1: delimiter sniffing -----------------------------------------------
 
 def test_pipe_delimited_file_whose_names_all_contain_a_comma():
@@ -68,6 +109,27 @@ def test_pipe_delimited_file_whose_names_all_contain_a_comma():
     assert len(sheets[0].headers) == 5
     assert len(sheets[0].rows) == 9
     assert sheets[0].rows[0][1] == "LAMB, THOMAS"
+
+
+def test_a_comma_file_whose_field_holds_pipes_stays_comma_delimited():
+    # "more columns wins" must not hand a 2-column comma file to the pipe
+    # parser, which would mash record one into the heading row
+    data = (
+        b"Ada Lovelace,red|green|blue\n"
+        b"Grace Hopper,a|b|c\n"
+        b"Alan Turing,x|y|z\n"
+    )
+    sheets = read_file("tags.csv", data)
+    assert len(sheets[0].headers) == 2, sheets[0].headers
+    # The name must stay a whole cell, not be split across the pipe
+    assert "Ada Lovelace" in sheets[0].headers
+    assert all("," not in h for h in sheets[0].headers)
+
+
+def test_a_header_row_with_pipes_in_one_field_stays_comma_delimited():
+    data = b"id,tags|more|cols\n1,red|green|blue\n2,a|b|c\n"
+    sheets = read_file("x.csv", data)
+    assert sheets[0].headers == ["id", "tags|more|cols"]
 
 
 def test_plain_comma_file_is_still_comma_delimited():
@@ -90,6 +152,19 @@ def test_headerless_xlsx_is_detected():
     sheets = read_file("cn.xlsx", buf.getvalue())
     assert sheets[0].headers[0] == "column_1"
     assert len(sheets[0].rows) == 4
+
+
+def test_formula_backfill_lines_up_on_a_headerless_workbook():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "S"
+    for i in range(1, 4):
+        ws.append([f"H0AK0010{i}", f"NAME{i}", f"=A{i}&B{i}"])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    sheets = read_file("cn.xlsx", buf.getvalue())
+    assert [r[2] for r in sheets[0].rows] == ["=A1&B1", "=A2&B2", "=A3&B3"]
 
 
 def test_xlsx_with_a_real_header_row_keeps_it():
@@ -177,6 +252,35 @@ def test_plain_role_words_are_still_names():
 
 
 # ---- templates: remembering values is opt-in -------------------------------
+
+def test_the_template_the_api_returns_carries_no_real_values():
+    """The saved file is whatever the API calls the template. Offering
+    candidate values in the same object put them in the shared file."""
+    import io
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    csv = (
+        b"Status,Diagnosis\n"
+        b"Active,Asthma\nInactive,Diabetes\nActive,Asthma\n"
+        b"Inactive,Diabetes\nActive,Asthma\nInactive,Diabetes\n"
+    )
+    session = client.post(
+        "/api/upload", files={"file": ("roster.csv", io.BytesIO(csv), "text/csv")}
+    ).json()["session_id"]
+    body = client.post(
+        "/api/standardize/template", json={"session_id": session}
+    ).json()
+
+    saved = json.dumps(body["template"])
+    for value in ("Asthma", "Diabetes", "Active", "Inactive"):
+        assert value not in saved, f"{value} reached the template file"
+    # the candidates are still offered, just not inside the template
+    assert body["suggested_values"]["Diagnosis"] == ["Asthma", "Diabetes"]
+
 
 def test_templates_do_not_remember_values_by_default():
     sheet = Sheet(

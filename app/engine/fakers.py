@@ -44,7 +44,9 @@ def normalize_value(value: str, col_type: str | None = None) -> str:
     collapsed = " ".join(value.split())
     if col_type in CASE_SENSITIVE_TYPES:
         return collapsed
-    return collapsed.casefold()
+    # lower(), not casefold(): casefold folds ß to ss, merging "Straße"
+    # and "Strasse" into one person and leaving one of them unrecoverable.
+    return collapsed.lower()
 
 
 class FakeGenerator:

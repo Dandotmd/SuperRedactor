@@ -44,7 +44,7 @@ def _key(value: str) -> str:
     found inside 'spoke to Ryan Hall Jr. today'. Both sides of the
     comparison must strip the same characters or they never meet.
     """
-    return " ".join(value.split()).strip(_EDGE_PUNCTUATION).casefold()
+    return " ".join(value.split()).strip(_EDGE_PUNCTUATION).lower()
 
 
 def _redacted_values(sheets, config) -> dict[str, dict[str, str]]:

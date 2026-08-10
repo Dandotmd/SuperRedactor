@@ -120,7 +120,7 @@ def make_template():
     session_id = upload("t.csv")
     return client.post(
         "/api/standardize/template", json={"session_id": session_id}
-    ).json()
+    ).json()["template"]
 
 
 def test_template_without_columns_is_rejected():

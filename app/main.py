@@ -370,7 +370,15 @@ def standardize_template(req: StandardizeRequest):
     session = _get_session(req.session_id)
     sheet = _pick_sheet(session, req.sheet)
     name = (session["filename"] or "template").rsplit(".", 1)[0]
-    return make_template(sheet, name=name)
+    template = make_template(sheet, name=name)
+    # The candidate value lists are real data from the user's file. They
+    # are returned beside the template, never inside it, because the
+    # template is what gets saved and shared.
+    return {
+        "template": template,
+        "can_remember_values": template.pop("can_remember_values", []),
+        "suggested_values": template.pop("suggested_values", {}),
+    }
 
 
 @app.post("/api/standardize/match")

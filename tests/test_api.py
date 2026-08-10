@@ -209,7 +209,7 @@ def make_template_via_api():
     session_id = upload_bytes("students.csv", GOOD_CSV)
     return client.post(
         "/api/standardize/template", json={"session_id": session_id}
-    ).json()
+    ).json()["template"]
 
 
 def test_standardize_template_from_upload():

@@ -133,7 +133,7 @@ def _sniff_delimiter(text: str) -> str:
     if not sample:
         return ","
 
-    best = (",", 0, 0)  # delimiter, consistency, columns
+    scores: dict[str, tuple[float, int]] = {}
     for candidate in (",", "|", "\t", ";"):
         try:
             rows = [
@@ -149,10 +149,20 @@ def _sniff_delimiter(text: str) -> str:
         common = max(set(widths), key=widths.count)
         if common < 2:
             continue
-        consistency = widths.count(common) / len(widths)
-        if (consistency, common) > (best[1], best[2]):
-            best = (candidate, consistency, common)
-    return best[0]
+        scores[candidate] = (widths.count(common) / len(widths), common)
+
+    if not scores:
+        return ","
+    best = max(scores, key=lambda d: scores[d])
+    comma = scores.get(",")
+    if best != "," and comma and comma[0] >= scores[best][0]:
+        # A comma file can hold pipes or semicolons inside one field, which
+        # splits just as evenly and looks "wider". Only prefer the other
+        # separator when it finds substantially more structure, or the
+        # first record ends up mashed into the heading row.
+        if scores[best][1] < comma[1] * 2:
+            return ","
+    return best
 
 
 # Getting this wrong in the "it's a header" direction is dangerous: the
@@ -256,20 +266,23 @@ def _read_xlsx(data: bytes) -> list[Sheet]:
             "Excel and saving a fresh copy."
         )
     sheets = []
+    header_rows: dict[str, int] = {}
     for ws in wb.worksheets:
         rows = [[_cell(v) for v in row] for row in ws.iter_rows(values_only=True)]
         if rows and _has_header(rows[0]):
+            header_rows[ws.title] = 1
             headers, body = rows[0], rows[1:]
         else:
             # A spreadsheet can be headerless too, and its first record
             # would otherwise sit in the header row, which is never redacted.
+            header_rows[ws.title] = 0
             headers = [f"column_{i + 1}" for i in range(len(rows[0]) if rows else 0)]
             body = rows
         headers, body = _normalize(headers, body)
         sheets.append(Sheet(name=ws.title, headers=headers, rows=body))
 
     if _contains_formulas(data):
-        _fill_from_formulas(data, sheets)
+        _fill_from_formulas(data, sheets, header_rows)
     return sheets
 
 
@@ -287,7 +300,9 @@ def _contains_formulas(data: bytes) -> bool:
     return False
 
 
-def _fill_from_formulas(data: bytes, sheets: list[Sheet]) -> None:
+def _fill_from_formulas(
+    data: bytes, sheets: list[Sheet], header_rows: dict[str, int]
+) -> None:
     """A workbook saved by a script or a web exporter often has no cached
     results for its formulas, so those cells read as empty — and a column
     that reads empty later looks deletable. Fall back to the formula text
@@ -303,7 +318,9 @@ def _fill_from_formulas(data: bytes, sheets: list[Sheet]) -> None:
         if ws is None:
             continue
         raw = [[_cell(v) for v in row] for row in ws.iter_rows(values_only=True)]
-        for row_number, row in enumerate(sheet.rows, start=1):
+        # Data starts after the heading row, if this sheet had one.
+        offset = header_rows.get(sheet.name, 1)
+        for row_number, row in enumerate(sheet.rows, start=offset):
             if row_number >= len(raw):
                 break
             source = raw[row_number]
