@@ -14,7 +14,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "httpx>=0.27"]
+# Dev only, and deliberately kept that way: the runtime list above is what a
+# locked-down machine has to approve, and the app still needs no node
+# toolchain. `playwright` rather than `pytest-playwright` because the browser
+# tests supply their own fixtures — that keeps the extra to one package (plus
+# greenlet and pyee) and lets a missing browser skip with an explanation
+# instead of erroring inside someone else's fixture.
+dev = ["pytest>=8.0", "httpx>=0.27", "playwright>=1.49"]
 
 [project.scripts]
 superredactor = "app.main:run"
@@ -28,6 +34,13 @@ packages = ["app", "app.engine"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    # `pytest -m ui` runs only these; `pytest -m 'not ui'` skips them outright.
+    # Left in the default run on purpose: they skip themselves with an
+    # explanation when the browser is missing, and a suite that silently
+    # stops covering the warnings is the failure mode worth avoiding.
+    "ui: drives the page in a real browser (needs `playwright install chromium`)",
+]
 filterwarnings = [
     # starlette-internal deprecation about its own httpx test dependency
     "ignore:Using `httpx` with `starlette.testclient`",

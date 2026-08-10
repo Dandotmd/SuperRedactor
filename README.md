@@ -293,7 +293,9 @@ docstring lists the public federal datasets used below.
 Every push and pull request runs the whole suite on Python 3.10 through 3.13,
 then runs it again under three fixed `PYTHONHASHSEED` values (a tie broken by
 set iteration order once made heading detection depend on the hash seed), then
-runs the property tests ten more times over fresh data.
+runs the property tests ten more times over fresh data. A separate job
+installs Chromium and runs the browser tests, with skipping turned off so the
+job cannot go green having tested nothing.
 
 ### Replaying a failing property test
 
@@ -343,6 +345,24 @@ pytest
 The engine (`app/engine/`) is pure Python; the FastAPI layer (`app/main.py`)
 and the static page are thin wrappers over it. Tests are written first; please
 keep it that way.
+
+### Browser tests
+
+The warnings in `app/static/app.js` are what stands between "I redacted this"
+and "I sent real names to an AI tool", and no API test can see them — the
+server can return a leak while the page draws nothing. `tests/test_ui.py`
+drives the real page in a real browser and asserts on the words on screen.
+
+```bash
+python -m playwright install chromium   # one-off, ~100 MB
+pytest -m ui                            # or just `pytest` — they run either way
+```
+
+Without that download they skip themselves with a message saying so, so
+`pytest` stays green if you never run it. Playwright is a **dev-only** extra:
+it is not needed to run SuperRedactor, the runtime dependency list above is
+unchanged, and there is still no node toolchain anywhere in the project. Use
+`pytest -m "not ui"` to leave them out.
 
 ## Roadmap
 
